@@ -1,0 +1,52 @@
+appId: org.cmsc.lighting-client
+productName: CMSC Lighting Client
+directories:
+  buildResources: build
+files:
+  - '!**/.vscode/*'
+  - '!src/*'
+  - '!docs/*'
+  - '!electron.vite.config.{js,ts,mjs,cjs}'
+  - '!vitest.config.ts'
+  - '!{.eslintcache,eslint.config.mjs,.prettierignore,.prettierrc.yaml,dev-app-update.yml,CHANGELOG.md,README.md}'
+  - '!{.env,.env.*,.npmrc,pnpm-lock.yaml}'
+  - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
+  # Host-platform artifact from `electron-builder install-app-deps`. node-gyp-build
+  # prefers build/Release over prebuilds/, so shipping it puts the build machine's
+  # binding in every package. Excluded so each target resolves its own prebuild.
+  - '!**/node_modules/@serialport/bindings-cpp/build/**'
+asarUnpack:
+  - resources/**
+  - '**/node_modules/@serialport/**'
+  - '**/node_modules/serialport/**'
+  - '**/node_modules/sacn/**'
+win:
+  executableName: cmsc-lighting-client
+  target:
+    - target: nsis
+      arch:
+        - x64
+nsis:
+  artifactName: ${name}-${version}-setup.${ext}
+  shortcutName: ${productName}
+  uninstallDisplayName: ${productName}
+  createDesktopShortcut: always
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  runAfterFinish: true
+mac:
+  entitlementsInherit: build/entitlements.mac.plist
+  extendInfo:
+    - NSDocumentsFolderUsageDescription: Application requests access to the user's Documents folder.
+  notarize: false
+dmg:
+  artifactName: ${name}-${version}.${ext}
+linux:
+  target:
+    - AppImage
+  maintainer: cmsc
+  category: Utility
+appImage:
+  artifactName: ${name}-${version}.${ext}
+npmRebuild: false
+publish: null
