@@ -117,12 +117,14 @@ export function seedMappings(scenes: Record<string, Scene>): Mapping[] {
     name,
     enabled: true,
     category: 'Alert levels',
-    trigger: {
-      preset: 'thorium.alertLevel',
-      params: { levels: [level], includeInitial: true },
-      conditions: [],
-      simulatorNames: []
-    },
+    triggers: [
+      {
+        preset: 'thorium.alertLevel',
+        params: { levels: [level], includeInitial: true },
+        conditions: []
+      }
+    ],
+    simulatorNames: [],
     actions: [
       {
         kind: 'activateScene',
@@ -147,12 +149,14 @@ export function seedMappings(scenes: Record<string, Scene>): Mapping[] {
       name: 'Thorium blackout action → Blackout',
       enabled: true,
       category: 'Blackout',
-      trigger: {
-        preset: 'thorium.action',
-        params: { actions: ['blackout'] },
-        conditions: [],
-        simulatorNames: []
-      },
+      triggers: [
+        {
+          preset: 'thorium.action',
+          params: { actions: ['blackout'] },
+          conditions: []
+        }
+      ],
+      simulatorNames: [],
       actions: [{ kind: 'blackout', on: true }],
       debounceMs: 0,
       notes: 'Seeded. FD "Blackout" station action turns the DMX blackout on.'
@@ -162,12 +166,14 @@ export function seedMappings(scenes: Record<string, Scene>): Mapping[] {
       name: 'Thorium online action → release Blackout',
       enabled: true,
       category: 'Blackout',
-      trigger: {
-        preset: 'thorium.action',
-        params: { actions: ['online'] },
-        conditions: [],
-        simulatorNames: []
-      },
+      triggers: [
+        {
+          preset: 'thorium.action',
+          params: { actions: ['online'] },
+          conditions: []
+        }
+      ],
+      simulatorNames: [],
       actions: [{ kind: 'blackout', on: false }],
       debounceMs: 0,
       notes: 'Seeded.'
@@ -177,12 +183,14 @@ export function seedMappings(scenes: Record<string, Scene>): Mapping[] {
       name: 'Thorium flash action → Flash scene',
       enabled: true,
       category: 'Effects',
-      trigger: {
-        preset: 'thorium.action',
-        params: { actions: ['flash', 'spark'] },
-        conditions: [],
-        simulatorNames: []
-      },
+      triggers: [
+        {
+          preset: 'thorium.action',
+          params: { actions: ['flash', 'spark'] },
+          conditions: []
+        }
+      ],
+      simulatorNames: [],
       actions: [
         {
           kind: 'activateScene',
@@ -200,12 +208,14 @@ export function seedMappings(scenes: Record<string, Scene>): Mapping[] {
       name: 'Flight reset → release effects',
       enabled: true,
       category: 'Flight',
-      trigger: {
-        preset: 'thorium.flight',
-        params: { event: 'reset' },
-        conditions: [],
-        simulatorNames: []
-      },
+      triggers: [
+        {
+          preset: 'thorium.flight',
+          params: { event: 'reset' },
+          conditions: []
+        }
+      ],
+      simulatorNames: [],
       actions: [
         { kind: 'releaseLayer', layerId: LAYER_IDS.effect, target: 'all' },
         { kind: 'releaseLayer', layerId: LAYER_IDS.scene, target: 'all' },
@@ -220,12 +230,14 @@ export function seedMappings(scenes: Record<string, Scene>): Mapping[] {
       name: 'Example: generic key lights-* (disabled)',
       enabled: false,
       category: 'Effects',
-      trigger: {
-        preset: 'thorium.generic',
-        params: { key: 'lights-*' },
-        conditions: [],
-        simulatorNames: []
-      },
+      triggers: [
+        {
+          preset: 'thorium.generic',
+          params: { key: 'lights-*' },
+          conditions: []
+        }
+      ],
+      simulatorNames: [],
       actions: [
         {
           kind: 'activateScene',

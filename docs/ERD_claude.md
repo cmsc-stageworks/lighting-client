@@ -176,7 +176,9 @@ All ids are UUID v4 strings. All names are user-facing and unique within their p
 // shared/types/config.ts (abridged; zod schemas in shared/schema/config.schema.ts are canonical)
 
 export interface AppConfig {
-  schemaVersion: 2;                  // v1→v2 migration: trigger.simulatorName → simulatorNames[], mapping.category
+  schemaVersion: 4;                  // v1→v2 trigger.simulatorName → simulatorNames[] + mapping.category;
+                                     // v2→v3 conditions may contain "any of" groups; v3→v4 mapping.trigger →
+                                     // mapping.triggers[] (ORed) and simulatorNames hoisted to the mapping
   settings: AppSettings;
   profiles: Profile[];
   activeProfileId: string;
@@ -291,11 +293,12 @@ export interface Scene {
 export type ConditionOp = 'eq' | 'neq' | 'contains' | 'gt' | 'gte' | 'lt' | 'lte' | 'regex' | 'exists' | 'notExists';
 export interface Condition { path: string; op: ConditionOp; value?: string | number | boolean; }
 
+export type ConditionNode = Condition | { any: Condition[] };   // schema v3: one level of "any of" groups
+
 export interface Trigger {
   preset: string;                    // key into shared/triggers/catalog.ts, e.g. "thorium.alertLevel", "custom.event"
   params: Record<string, unknown>;   // preset-specific, validated by the preset's zod schema
-  conditions: Condition[];           // extra AND conditions (always allowed)
-  simulatorNames: string[];          // schema v2: only events from these simulators; empty = any in scope
+  conditions: ConditionNode[];       // extra conditions, ANDed; a group passes if any of its leaves does
 }
 
 export type Action =
@@ -315,7 +318,8 @@ export interface Mapping {
   name: string;
   enabled: boolean;
   category: string;                  // schema v2: free-text grouping for filters ("Alert levels", "Effects", …)
-  trigger: Trigger;
+  triggers: Trigger[];               // schema v4: the mapping fires when ANY of these matches (min 1)
+  simulatorNames: string[];          // schema v4 (was per-trigger): only events from these simulators; empty = any in scope
   actions: Action[];
   debounceMs: number;                // 0 = none
   notes: string;
@@ -429,15 +433,19 @@ Condition path grammar: dot path with optional `[n]` or `[]` (any element). Reso
 ### 5.3 Matching algorithm (`matcher.ts`)
 
 ```
-matchEvent(compiled, event):
+matchTrigger(compiled, event):
+  if compiled.unresolved → false
   if event.type ∉ compiled.types → false
   if compiled.names && event.name ∉ compiled.names → false
-  for c in compiled.conditions: if !evalCondition(c, event.data) → false
+  for n in compiled.conditions:            # leaves are ANDed; a group passes if any leaf does
+    if !evalNode(n, event.data) → false
   return true
+matchMapping(m, event):
+  if m.simulatorNames && !anyEqualsIgnoreCase(m.simulatorNames, event.simulatorName) → false
+  return any(matchTrigger(t, event) for t in m.triggers)
 RulesEngine.onEvent(event):
   for m in enabledMappings (pre-compiled, cached, invalidated on config change):
-    if m.trigger.simulatorName && !equalsIgnoreCase(event.simulatorName, m.trigger.simulatorName) → skip
-    if !matchEvent(m.compiled, event) → skip
+    if !matchMapping(m.compiled, event) → skip
     if m.debounceMs && now - lastFired[m.id] < m.debounceMs → skip
     lastFired[m.id] = now; stats[m.id].count++
     event.matchedMappingIds.push(m.id)

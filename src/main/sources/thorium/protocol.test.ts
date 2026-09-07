@@ -121,6 +121,32 @@ describe('SubscriptionsClient', () => {
     expect(srv.received.filter((m) => m.type === 'start').length).toBe(2)
   })
 
+  it('reconnectNow() emits disconnected and leaves exactly one live socket', async () => {
+    client = new SubscriptionsClient(
+      () => `ws://127.0.0.1:${srv.port}/graphql`,
+      () => ({})
+    )
+    let count = 0
+    client.subscribe('subscription { events }', undefined, () => count++)
+    const disconnected: string[] = []
+    client.on('disconnected', (r: string) => disconnected.push(r))
+    client.connect()
+    await until(() => count === 1)
+
+    client.reconnectNow()
+    await until(() => disconnected.length === 1)
+    await until(() => count === 2, 5000)
+    // Give any leaked socket a chance to (fail to) init.
+    await wait(200)
+
+    const openServerSockets = srv.sockets.filter((s) => s.readyState === s.OPEN)
+    expect(openServerSockets.length).toBe(1)
+    // One start frame per connection — not doubled.
+    const starts = srv.received.filter((m) => m.type === 'start')
+    expect(starts.length).toBe(2)
+    expect(client.isConnected()).toBe(true)
+  })
+
   it('stays connected on a server that never sends ka (pings answered by the socket)', async () => {
     client = new SubscriptionsClient(
       () => `ws://127.0.0.1:${srv.port}/graphql`,

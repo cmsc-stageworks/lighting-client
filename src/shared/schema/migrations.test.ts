@@ -14,7 +14,34 @@ describe('config schema + migrations', () => {
   it('migrates a version-less document', () => {
     const { migrated, applied } = migrateConfig({ settings: {} })
     expect(migrated.schemaVersion).toBe(CONFIG_SCHEMA_VERSION)
-    expect(applied).toEqual([1, 2])
+    expect(applied).toEqual([1, 2, 3, 4])
+  })
+  it('v2 → v4 keeps flat conditions and hoists the simulator restriction', () => {
+    const v2 = {
+      schemaVersion: 2,
+      profiles: [
+        {
+          mappings: [
+            {
+              name: 'a',
+              trigger: {
+                preset: 'x',
+                conditions: [{ path: 'level', op: 'eq', value: '5' }],
+                simulatorNames: ['Magellan']
+              }
+            }
+          ]
+        }
+      ]
+    }
+    const { migrated, applied } = migrateConfig(v2)
+    expect(applied).toEqual([3, 4])
+    const ms = (migrated.profiles as { mappings: Record<string, unknown>[] }[])[0].mappings
+    expect(ms[0].trigger).toBeUndefined()
+    expect(ms[0].simulatorNames).toEqual(['Magellan'])
+    expect(ms[0].triggers).toEqual([
+      { preset: 'x', conditions: [{ path: 'level', op: 'eq', value: '5' }] }
+    ])
   })
   it('migrates v1 mappings to simulatorNames + category', () => {
     const v1 = {
@@ -30,9 +57,11 @@ describe('config schema + migrations', () => {
     }
     const { migrated } = migrateConfig(v1)
     const ms = (migrated.profiles as { mappings: Record<string, unknown>[] }[])[0].mappings
-    expect(ms[0].trigger).toEqual({ preset: 'x', simulatorNames: ['Magellan'] })
+    expect(ms[0].triggers).toEqual([{ preset: 'x' }])
+    expect(ms[0].simulatorNames).toEqual(['Magellan'])
     expect(ms[0].category).toBe('General')
-    expect(ms[1].trigger).toEqual({ preset: 'x', simulatorNames: [] })
+    expect(ms[1].triggers).toEqual([{ preset: 'x' }])
+    expect(ms[1].simulatorNames).toEqual([])
     expect(ms[1].category).toBe('Keep')
   })
   it('rejects newer versions', () => {

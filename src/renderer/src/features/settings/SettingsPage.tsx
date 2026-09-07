@@ -297,27 +297,38 @@ export function SettingsPage(): React.JSX.Element {
               </div>
             ) : (
               <div className="flex flex-col gap-1 max-h-48 overflow-y-auto">
-                {backups.slice(0, 20).map((b) => (
-                  <div key={b.path} className="flex items-center gap-3 text-[13px]">
-                    <span className="mono text-muted">{new Date(b.ts).toLocaleString()}</span>
-                    <span className="text-faint">
-                      {formatAgo(b.ts)} · {Math.round(b.size / 1024)} KB
-                    </span>
-                    <InlineConfirm
-                      label="Restore"
-                      question="Replace current config?"
-                      variant="secondary"
-                      onConfirm={() =>
-                        void invoke('config.restoreBackup', b.path).then((r) =>
-                          r.ok
-                            ? toast('success', 'Backup restored')
-                            : toast('error', (r.errors ?? []).join('; '))
-                        )
-                      }
-                      className="ml-auto"
-                    />
-                  </div>
-                ))}
+                {backups.slice(0, 20).map((b) => {
+                  const preUpgrade = /preupgrade-v(\d+)/.exec(b.path.replace(/\\/g, '/'))
+                  return (
+                    <div key={b.path} className="flex items-center gap-3 text-[13px]">
+                      <span className="mono text-muted">{new Date(b.ts).toLocaleString()}</span>
+                      <span className="text-faint">
+                        {formatAgo(b.ts)} · {Math.round(b.size / 1024)} KB
+                      </span>
+                      {preUpgrade && (
+                        <span
+                          className="rounded bg-warning/15 text-warning px-1.5 py-0.5 text-[11px]"
+                          title="Saved automatically before a config schema upgrade — restore this if you downgrade the app"
+                        >
+                          pre-upgrade (v{preUpgrade[1]})
+                        </span>
+                      )}
+                      <InlineConfirm
+                        label="Restore"
+                        question="Replace current config?"
+                        variant="secondary"
+                        onConfirm={() =>
+                          void invoke('config.restoreBackup', b.path).then((r) =>
+                            r.ok
+                              ? toast('success', 'Backup restored')
+                              : toast('error', (r.errors ?? []).join('; '))
+                          )
+                        }
+                        className="ml-auto"
+                      />
+                    </div>
+                  )
+                })}
               </div>
             )}
           </div>

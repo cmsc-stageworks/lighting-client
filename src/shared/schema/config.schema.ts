@@ -233,12 +233,24 @@ export const ConditionSchema = z.object({
 })
 export type Condition = z.infer<typeof ConditionSchema>
 
+/**
+ * An "any of" group: passes when *any* of its leaf conditions passes. Groups do
+ * not nest — one level is enough to express `(x or y) and z` while keeping the
+ * mapping editor readable.
+ */
+export const ConditionGroupSchema = z.object({
+  any: z.array(ConditionSchema).min(1)
+})
+export type ConditionGroup = z.infer<typeof ConditionGroupSchema>
+
+/** A trigger condition list is a flat array of leaves and/or "any of" groups, ANDed together. */
+export const ConditionNodeSchema = z.union([ConditionGroupSchema, ConditionSchema])
+export type ConditionNode = z.infer<typeof ConditionNodeSchema>
+
 export const TriggerSchema = z.object({
   preset: z.string().min(1),
   params: z.record(z.string(), z.unknown()).default({}),
-  conditions: z.array(ConditionSchema).default([]),
-  /** Empty = any simulator in scope. Otherwise only events from these simulators (by Thorium name). */
-  simulatorNames: z.array(z.string().trim().min(1)).default([])
+  conditions: z.array(ConditionNodeSchema).default([])
 })
 export type Trigger = z.infer<typeof TriggerSchema>
 
@@ -298,7 +310,17 @@ export const MappingSchema = z.object({
   name,
   enabled: z.boolean().default(true),
   category: z.string().trim().max(40).default('General'),
-  trigger: TriggerSchema,
+  /**
+   * The mapping fires when **any** of these triggers matches (OR). One trigger is
+   * the common case; a second one lets an operator say "on X or on Y" with the
+   * full trigger picker instead of hand-written conditions.
+   */
+  triggers: z.array(TriggerSchema).min(1),
+  /**
+   * Empty = any simulator in scope. Otherwise only events from these simulators
+   * (by Thorium name). Applies to every trigger in the mapping.
+   */
+  simulatorNames: z.array(z.string().trim().min(1)).default([]),
   actions: z.array(ActionSchema).default([]),
   debounceMs: z.number().int().min(0).max(600_000).default(0),
   notes: z.string().max(2000).default('')

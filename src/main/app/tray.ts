@@ -3,13 +3,41 @@ import type { RuntimeSnapshot } from '@shared/types/state'
 import type { Services } from '../services'
 
 /** 16×16 circle icon in a status color, generated at runtime (no asset needed). */
+const iconCache = new Map<string, Electron.NativeImage>()
 function dotIcon(color: string): Electron.NativeImage {
+  const cached = iconCache.get(color)
+  if (cached) return cached
   const size = 32
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 32 32"><circle cx="16" cy="16" r="11" fill="${color}"/><circle cx="16" cy="16" r="14" fill="none" stroke="${color}" stroke-opacity="0.35" stroke-width="2"/></svg>`
-  const img = nativeImage.createFromDataURL(
-    `data:image/svg+xml;base64,${Buffer.from(svg).toString('base64')}`
-  )
-  return img.resize({ width: 16, height: 16 })
+  const img = nativeImage
+    .createFromDataURL(`data:image/svg+xml;base64,${Buffer.from(svg).toString('base64')}`)
+    .resize({ width: 16, height: 16 })
+  iconCache.set(color, img)
+  return img
+}
+
+export function statusColor(snap: RuntimeSnapshot): string {
+  const outputs = Object.values(snap.outputs)
+  const anyError =
+    outputs.some((o) => o.state === 'error') ||
+    snap.thorium.state === 'error' ||
+    snap.mqtt.state === 'error'
+  const anyWarn =
+    snap.thorium.state === 'reconnecting' ||
+    snap.mqtt.state === 'reconnecting' ||
+    outputs.some((o) => o.state === 'starting')
+  if (snap.compositor.blackout || anyError) return '#ff5d5d'
+  if (anyWarn) return '#ffb454'
+  return '#3ddc97'
+}
+
+export function statusLines(snap: RuntimeSnapshot): string[] {
+  const outputs = Object.values(snap.outputs)
+  return [
+    `Thorium: ${snap.thorium.state}`,
+    `MQTT: ${snap.mqtt.state}`,
+    `Outputs: ${outputs.filter((o) => o.state === 'ok').length}/${outputs.length} ok`
+  ]
 }
 
 export function createTray(services: Services, getWindow: () => BrowserWindow | null): Tray {
@@ -24,29 +52,25 @@ export function createTray(services: Services, getWindow: () => BrowserWindow | 
     w.focus()
   }
 
+  // The snapshot fires ~20×/s and most fields are irrelevant to the tray; only
+  // touch the native Tray/Menu when something it actually shows has changed,
+  // otherwise NativeImage/Menu handles churn for the life of the process.
+  let latest = services.snapshot()
+  let lastColor = ''
+  let lastMenuKey = ''
+
   const rebuild = (snap: RuntimeSnapshot): void => {
-    const outputs = Object.values(snap.outputs)
-    const anyError =
-      outputs.some((o) => o.state === 'error') ||
-      snap.thorium.state === 'error' ||
-      snap.mqtt.state === 'error'
-    const anyWarn =
-      snap.thorium.state === 'reconnecting' ||
-      snap.mqtt.state === 'reconnecting' ||
-      outputs.some((o) => o.state === 'starting')
-    const color = snap.compositor.blackout
-      ? '#ff5d5d'
-      : anyError
-        ? '#ff5d5d'
-        : anyWarn
-          ? '#ffb454'
-          : '#3ddc97'
-    tray.setImage(dotIcon(color))
-    const status = [
-      `Thorium: ${snap.thorium.state}`,
-      `MQTT: ${snap.mqtt.state}`,
-      `Outputs: ${outputs.filter((o) => o.state === 'ok').length}/${outputs.length} ok`
-    ]
+    latest = snap
+    const color = statusColor(snap)
+    if (color !== lastColor) {
+      tray.setImage(dotIcon(color))
+      lastColor = color
+    }
+    const status = statusLines(snap)
+    const menuKey = `${status.join('|')}|${snap.compositor.blackout}`
+    if (menuKey === lastMenuKey) return
+    lastMenuKey = menuKey
+
     tray.setToolTip(`CMSC Lighting Client\n${status.join('\n')}`)
     tray.setContextMenu(
       Menu.buildFromTemplate([
@@ -55,8 +79,9 @@ export function createTray(services: Services, getWindow: () => BrowserWindow | 
         ...status.map((s) => ({ label: s, enabled: false })),
         { type: 'separator' },
         {
-          label: snap.compositor.blackout ? 'Release blackout' : 'Blackout',
-          click: () => services.setBlackout(!snap.compositor.blackout)
+          label: latest.compositor.blackout ? 'Release blackout' : 'Blackout',
+          // Read the current state at click time, not the state this menu was built with.
+          click: () => services.setBlackout(!latest.compositor.blackout)
         },
         { label: 'Release all scenes', click: () => services.releaseAll() },
         { type: 'separator' },
@@ -65,7 +90,7 @@ export function createTray(services: Services, getWindow: () => BrowserWindow | 
     )
   }
 
-  rebuild(services.snapshot())
+  rebuild(latest)
   services.on('snapshot', rebuild)
   tray.on('click', show)
   tray.on('double-click', show)

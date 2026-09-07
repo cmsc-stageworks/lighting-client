@@ -18,10 +18,13 @@ interface ToastStore {
 }
 
 let seq = 0
+let started = false
 
 export const useToasts = create<ToastStore>((set, get) => ({
   toasts: [],
   init: () => {
+    if (started) return
+    started = true
     on('toast', (t) => get().push({ level: t.level, message: t.message }))
   },
   push: (t) => {

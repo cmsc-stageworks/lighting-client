@@ -21,11 +21,15 @@ const emptyRef: ReferenceData = {
   knownEventNames: THORIUM_EVENT_NAMES
 }
 
+let started = false
+
 export const useRuntime = create<RuntimeStore>((set) => ({
   snapshot: null,
   refData: emptyRef,
   ready: false,
   init: async () => {
+    if (started) return
+    started = true
     const [snapshot, refData] = await Promise.all([
       invoke('runtime.getSnapshot'),
       invoke('thorium.getReferenceData')
@@ -48,3 +52,5 @@ export const selectOutputs = (s: RuntimeStore): RuntimeSnapshot['outputs'] =>
   s.snapshot?.outputs ?? {}
 export const selectCompositor = (s: RuntimeStore): RuntimeSnapshot['compositor'] | null =>
   s.snapshot?.compositor ?? null
+export const selectPerf = (s: RuntimeStore): RuntimeSnapshot['perf'] | null =>
+  s.snapshot?.perf ?? null

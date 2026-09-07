@@ -17,8 +17,12 @@ type Handler<C extends IpcChannel> = (
   ...args: Parameters<IpcApi[C]>
 ) => ReturnType<IpcApi[C]> | Promise<Awaited<ReturnType<IpcApi[C]>>>
 
-/** Pending import previews keyed by token (consumed by importApply). */
-const importPreviews = new Map<string, { kind: 'all' | 'partial'; text: string }>()
+/**
+ * Pending import preview, kept only until the next preview or an apply. A preview
+ * holds the full config file text, so at most one is retained rather than one per
+ * previewed-then-cancelled import.
+ */
+let importPreview: { token: string; kind: 'all' | 'partial'; text: string } | null = null
 
 export function registerIpc(services: Services, getWindow: () => BrowserWindow | null): void {
   const handle = <C extends IpcChannel>(
@@ -88,7 +92,7 @@ export function registerIpc(services: Services, getWindow: () => BrowserWindow |
     const text = await fs.readFile(res.filePaths[0], 'utf8')
     const preview = s.store.previewImport(text)
     const token = randomBytes(8).toString('hex')
-    importPreviews.set(token, { kind: preview.kind, text })
+    importPreview = { token, kind: preview.kind, text }
     const out: ImportPreview =
       preview.kind === 'all'
         ? {
@@ -101,9 +105,9 @@ export function registerIpc(services: Services, getWindow: () => BrowserWindow |
     return out
   })
   handle('config.importApply', z.tuple([str]), async (token) => {
-    const p = importPreviews.get(token)
+    const p = importPreview && importPreview.token === token ? importPreview : null
     if (!p) return { ok: false, errors: ['Import preview expired; choose the file again'] }
-    importPreviews.delete(token)
+    importPreview = null
     try {
       const preview = s.store.previewImport(p.text)
       if (preview.kind === 'all') {

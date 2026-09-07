@@ -59,6 +59,17 @@ const log = getLogger('thorium')
 
 interface PerSimSubs {
   unsubs: (() => void)[]
+}
+
+/**
+ * Derived-state snapshots per simulator. Kept in a map that is *not* torn down
+ * with the subscriptions: a `flightsUpdate` re-runs `resyncScope()` and a
+ * reconnect re-runs `onConnected()`, and if this were reset each time the next
+ * `simulatorsUpdate` would look like a first read and re-emit `alertLevel.changed`
+ * with `initial: true` — re-latching the alert scene over whatever the operator
+ * had set. Cleared only on a full `stop()`.
+ */
+interface PerSimState {
   sim: SimState | null
   reactors: ReactorState | null
   systems: SystemsState | null
@@ -87,6 +98,7 @@ export class ThoriumAdapter extends EventEmitter {
   }
   private globalUnsubs: (() => void)[] = []
   private perSim = new Map<string, PerSimSubs>()
+  private perSimState = new Map<string, PerSimState>()
   private flightState: FlightState | null = null
   private refData: ReferenceData = {
     fetchedAt: null,
@@ -101,6 +113,8 @@ export class ThoriumAdapter extends EventEmitter {
   private eventTimes: number[] = []
   private droppedOutOfScope = 0
   private started = false
+  /** bumped on every (re)connection so async setup can detect it has been superseded */
+  private connectGen = 0
 
   constructor(
     settings: ThoriumSettings,
@@ -184,9 +198,13 @@ export class ThoriumAdapter extends EventEmitter {
 
   async stop(): Promise<void> {
     this.started = false
+    this.connectGen++
     if (this.rttTimer) clearInterval(this.rttTimer)
     this.rttTimer = null
     this.teardownSubscriptions()
+    // Full stop (also used for a connection-settings change): forget derived
+    // state so the next connection re-applies base lighting from `initial`.
+    this.perSimState.clear()
     if (this.ws.isConnected()) {
       await this.http
         .mutate(M_CLIENT_DISCONNECT, { client: this.settings.clientId })
@@ -228,6 +246,11 @@ export class ThoriumAdapter extends EventEmitter {
 
   private async onConnected(): Promise<void> {
     log.info(`connected to ${this.baseUrl()}`)
+    const gen = ++this.connectGen
+    // Always start from a clean slate: a reconnect (manual or automatic) can reach
+    // here with stale subscriptions still registered, which would otherwise be
+    // duplicated and deliver every firehose event twice.
+    this.teardownSubscriptions()
     this.setState({ state: 'connected', reason: undefined, since: Date.now() })
     try {
       await this.http.mutate(M_CLIENT_CONNECT, {
@@ -241,6 +264,10 @@ export class ThoriumAdapter extends EventEmitter {
       log.warn(`refdata failed: ${(err as Error).message}`)
     )
     await this.fetchAssignment().catch(() => undefined)
+    // If the socket dropped (or was superseded) while we awaited the HTTP calls,
+    // a newer onConnected/onDisconnected has run — do not lay subscriptions on a
+    // dead connection.
+    if (this.connectGen !== gen || !this.ws.isConnected()) return
     this.setupGlobalSubscriptions()
     this.resyncScope()
     this.bus.emit({
@@ -256,6 +283,7 @@ export class ThoriumAdapter extends EventEmitter {
 
   private onDisconnected(reason: string): void {
     log.warn(`disconnected: ${reason}`)
+    this.connectGen++
     this.teardownSubscriptions()
     this.setState({ state: this.started ? 'reconnecting' : 'disabled', reason, since: null })
     this.bus.emit({
@@ -332,19 +360,14 @@ export class ThoriumAdapter extends EventEmitter {
       if (!wanted.has(id)) {
         for (const u of s.unsubs) u()
         this.perSim.delete(id)
+        // Note: `perSimState` is intentionally kept so a simulator that returns
+        // to scope does not re-fire an `initial` alert change.
         this.emit('scopeLeft', id)
       }
     }
     for (const id of wanted) {
       if (this.perSim.has(id)) continue
-      const entry: PerSimSubs = {
-        unsubs: [],
-        sim: null,
-        reactors: null,
-        systems: null,
-        shieldsUp: null,
-        stealthOn: null
-      }
+      const entry: PerSimSubs = { unsubs: [] }
       this.perSim.set(id, entry)
       entry.unsubs.push(
         this.ws.subscribe(SUB_SIMULATOR, { simulatorId: id }, (data) =>
@@ -505,6 +528,16 @@ export class ThoriumAdapter extends EventEmitter {
     this.resyncScope()
   }
 
+  /** Persistent derived-state entry for a simulator (survives subscription churn). */
+  private simState(simId: string): PerSimState {
+    let st = this.perSimState.get(simId)
+    if (!st) {
+      st = { sim: null, reactors: null, systems: null, shieldsUp: null, stealthOn: null }
+      this.perSimState.set(simId, st)
+    }
+    return st
+  }
+
   private onSimulator(simId: string, sims: GqlSimulator[]): void {
     const entry = this.perSim.get(simId)
     const sim = sims.find((s) => s.id === simId)
@@ -515,8 +548,9 @@ export class ThoriumAdapter extends EventEmitter {
       alertLevel: sim.training ? '5' : (sim.alertlevel ?? null),
       training: !!sim.training
     })
-    const { events, state } = deriveSimulator(entry.sim, sim)
-    entry.sim = state
+    const st = this.simState(simId)
+    const { events, state } = deriveSimulator(st.sim, sim)
+    st.sim = state
     for (const e of events)
       this.bus.emit({
         source: 'thorium',
@@ -533,14 +567,15 @@ export class ThoriumAdapter extends EventEmitter {
     const entry = this.perSim.get(simId)
     if (!entry) return
     for (const r of reactors) this.registry.registerSystem(r.id, simId)
+    const st = this.simState(simId)
     const { events, state } = deriveReactors(
-      entry.reactors,
+      st.reactors,
       reactors,
       simId,
       this.settings.batteryThresholds,
       this.settings.reactorHeatThreshold
     )
-    entry.reactors = state
+    st.reactors = state
     this.emitDerived(simId, events)
   }
 
@@ -548,8 +583,9 @@ export class ThoriumAdapter extends EventEmitter {
     const entry = this.perSim.get(simId)
     if (!entry) return
     for (const s of systems) this.registry.registerSystem(s.id, simId)
-    const { events, state } = deriveSystems(entry.systems, systems, simId)
-    entry.systems = state
+    const st = this.simState(simId)
+    const { events, state } = deriveSystems(st.systems, systems, simId)
+    st.systems = state
     this.emitDerived(simId, events)
   }
 
@@ -557,8 +593,9 @@ export class ThoriumAdapter extends EventEmitter {
     const entry = this.perSim.get(simId)
     if (!entry) return
     for (const s of shields) this.registry.registerSystem(s.id, simId)
-    const { events, anyUp } = deriveShields(entry.shieldsUp, shields, simId)
-    entry.shieldsUp = anyUp
+    const st = this.simState(simId)
+    const { events, anyUp } = deriveShields(st.shieldsUp, shields, simId)
+    st.shieldsUp = anyUp
     this.emitDerived(simId, events)
   }
 
@@ -566,8 +603,9 @@ export class ThoriumAdapter extends EventEmitter {
     const entry = this.perSim.get(simId)
     if (!entry) return
     for (const s of fields) this.registry.registerSystem(s.id, simId)
-    const { events, on } = deriveStealth(entry.stealthOn, fields, simId)
-    entry.stealthOn = on
+    const st = this.simState(simId)
+    const { events, on } = deriveStealth(st.stealthOn, fields, simId)
+    st.stealthOn = on
     this.emitDerived(simId, events)
   }
 
@@ -603,10 +641,6 @@ export class ThoriumAdapter extends EventEmitter {
       this.emit('refdata', this.refData)
     }
     return this.refData
-  }
-
-  setSeenEventNames(names: string[]): void {
-    this.refData = { ...this.refData, seenEventNames: names }
   }
 
   // ------------------------------------------------------------------ mutations

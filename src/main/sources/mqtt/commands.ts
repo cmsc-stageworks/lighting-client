@@ -22,7 +22,8 @@ export const MqttCommandSchema = z.discriminatedUnion('action', [
     universe: z.number().int().min(1),
     channel: z.number().int().min(1).max(512),
     value: z.number().int().min(0).max(255),
-    holdMs: z.number().int().min(0).optional()
+    // Capped at 10 min: a runaway publisher must not accumulate long-lived timers.
+    holdMs: z.number().int().min(0).max(600_000).optional()
   }),
   z.object({
     action: z.literal('alertLevel'),

@@ -15,6 +15,9 @@ export interface EmitOptions {
  * Central typed event bus. Sources call `emit`, the RulesEngine listens first
  * (so it can annotate `matchedMappingIds`), then the EventLog and publishers.
  */
+/** Sliding window for the events-per-second gauge. */
+const RATE_WINDOW_MS = 5000
+
 export class EventBus {
   private emitter = new EventEmitter()
   private rateWindow: number[] = []
@@ -45,6 +48,14 @@ export class EventBus {
 
   publish(ev: AppEvent): void {
     this.rateWindow.push(ev.ts)
+    // Trim on push so the window can never grow unbounded even if `rate()` is
+    // never polled (it feeds a diagnostics gauge that may be off).
+    const cutoff = ev.ts - RATE_WINDOW_MS
+    if (this.rateWindow.length > 256 && this.rateWindow[0] < cutoff) {
+      let i = 0
+      while (i < this.rateWindow.length && this.rateWindow[i] < cutoff) i++
+      this.rateWindow.splice(0, i)
+    }
     this.emitter.emit('event', ev)
   }
 
@@ -61,8 +72,8 @@ export class EventBus {
 
   /** Events per second over the last 5 s window. */
   rate(now = Date.now()): number {
-    const cutoff = now - 5000
+    const cutoff = now - RATE_WINDOW_MS
     while (this.rateWindow.length && this.rateWindow[0] < cutoff) this.rateWindow.shift()
-    return Math.round((this.rateWindow.length / 5) * 10) / 10
+    return Math.round((this.rateWindow.length / (RATE_WINDOW_MS / 1000)) * 10) / 10
   }
 }

@@ -205,6 +205,14 @@ export function StatusBar(): React.JSX.Element {
         <span className="mono">{Math.round(snap.compositor.grandMaster * 100)}%</span>
         <span className="mx-1 text-faint">·</span>
         <span>{snap.compositor.active.length} active</span>
+        {snap.perf && (
+          <>
+            <span className="mx-1 text-faint">·</span>
+            <span className="mono" title="Compositor ticks per second (target 40)">
+              {snap.perf.schedulerFps} fps
+            </span>
+          </>
+        )}
       </div>
     </div>
   )

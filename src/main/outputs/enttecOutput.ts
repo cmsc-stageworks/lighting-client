@@ -18,9 +18,13 @@ export class EnttecProOutput implements OutputDriver {
   private lastSendTimes: number[] = []
   private lastFrame: Uint8Array = new Uint8Array(DMX_CHANNELS + 1)
   private stopped = true
+  private opening = false
   private reopenTimer: ReturnType<typeof setTimeout> | null = null
   private minIntervalMs: number
   private lastWriteAt = 0
+  private writeStartedAt = 0
+  /** A write/drain callback that never fires must not silence the port forever. */
+  private static readonly WRITE_STALL_MS = 5000
 
   constructor(private cfg: EnttecConfig) {
     this.id = cfg.id
@@ -54,45 +58,66 @@ export class EnttecProOutput implements OutputDriver {
   }
 
   private async open(): Promise<void> {
-    if (this.stopped) return
-    const path = await this.resolvePath()
-    if (!path) {
-      this.fail('Port not found — is the Enttec plugged in?')
-      this.scheduleReopen()
-      return
-    }
-    await new Promise<void>((resolve) => {
-      const port = new SerialPort(
-        { path, baudRate: 250000, dataBits: 8, stopBits: 2, parity: 'none', autoOpen: false },
-        undefined
-      )
-      port.on('error', (err) => {
-        log.warn(`port error on ${path}: ${err.message}`)
-        this.fail(friendlyErrorMessage(err))
-        this.closePort()
+    if (this.stopped || this.opening || this.port) return
+    this.opening = true
+    try {
+      const path = await this.resolvePath()
+      if (this.stopped) return
+      if (!path) {
+        this.fail('Port not found — is the Enttec plugged in?')
         this.scheduleReopen()
-      })
-      port.on('close', () => {
-        if (this.stopped) return
-        log.warn(`port ${path} closed unexpectedly`)
-        this.fail('Port closed — device unplugged?')
-        this.port = null
-        this.scheduleReopen()
-      })
-      port.open((err) => {
-        if (err) {
+        return
+      }
+      await new Promise<void>((resolve) => {
+        const port = new SerialPort(
+          { path, baudRate: 250000, dataBits: 8, stopBits: 2, parity: 'none', autoOpen: false },
+          undefined
+        )
+        port.on('error', (err) => {
+          // Ignore events from a port we've already abandoned or replaced.
+          if (this.port !== port) return
+          log.warn(`port error on ${path}: ${err.message}`)
           this.fail(friendlyErrorMessage(err))
+          this.closePort()
           this.scheduleReopen()
+        })
+        port.on('close', () => {
+          if (this.port !== port || this.stopped) return
+          log.warn(`port ${path} closed unexpectedly`)
+          this.fail('Port closed — device unplugged?')
+          this.port = null
+          this.scheduleReopen()
+        })
+        port.open((err) => {
+          if (err) {
+            // This port never became live — detach its listeners so a later
+            // close/error from it cannot touch the driver's state.
+            port.removeAllListeners()
+            this.fail(friendlyErrorMessage(err))
+            this.scheduleReopen()
+            resolve()
+            return
+          }
+          if (this.stopped) {
+            port.removeAllListeners()
+            try {
+              port.close(() => undefined)
+            } catch {
+              /* ignore */
+            }
+            resolve()
+            return
+          }
+          this.port = port
+          this.readyToWrite = true
+          this.state = { state: 'ok', fps: 0, lastSendAt: null, detail: path }
+          log.info(`opened ${path}`)
           resolve()
-          return
-        }
-        this.port = port
-        this.readyToWrite = true
-        this.state = { state: 'ok', fps: 0, lastSendAt: null, detail: path }
-        log.info(`opened ${path}`)
-        resolve()
+        })
       })
-    })
+    } finally {
+      this.opening = false
+    }
   }
 
   private fail(reason: string): void {
@@ -110,7 +135,11 @@ export class EnttecProOutput implements OutputDriver {
   private closePort(): void {
     const p = this.port
     this.port = null
-    if (p && p.isOpen) p.close(() => undefined)
+    if (p) {
+      p.removeAllListeners()
+      p.on('error', () => {})
+      if (p.isOpen) p.close(() => undefined)
+    }
   }
 
   async stop(): Promise<void> {
@@ -135,16 +164,29 @@ export class EnttecProOutput implements OutputDriver {
 
   private write(frame: Uint8Array, now: number): void {
     const port = this.port
-    if (!port || !port.isOpen || !this.readyToWrite) return
+    if (!port || !port.isOpen) return
+    if (!this.readyToWrite) {
+      if (now - this.writeStartedAt < EnttecProOutput.WRITE_STALL_MS) return
+      // The previous write/drain callback never fired — the port is wedged.
+      log.warn(`write stalled >${EnttecProOutput.WRITE_STALL_MS} ms on ${port.path}; reopening`)
+      this.fail('Write stalled — device unresponsive')
+      this.readyToWrite = true
+      this.closePort()
+      this.scheduleReopen()
+      return
+    }
     this.readyToWrite = false
     this.lastWriteAt = now
+    this.writeStartedAt = now
     port.write(buildEnttecPacket(frame), (err) => {
+      if (this.port !== port) return
       if (err) {
         this.fail(friendlyErrorMessage(err))
         this.readyToWrite = true
         return
       }
       port.drain(() => {
+        if (this.port !== port) return
         this.readyToWrite = true
         this.lastSendTimes.push(Date.now())
         this.state.lastSendAt = Date.now()

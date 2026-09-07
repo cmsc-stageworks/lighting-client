@@ -62,6 +62,9 @@ export class SacnOutput implements OutputDriver {
   private restartTimer: ReturnType<typeof setTimeout> | null = null
   private backoffMs = 1000
   private sending = false
+  private sendingSince = 0
+  /** A send() promise that never settles must not silence the universe forever. */
+  private static readonly SEND_STALL_MS = 5000
 
   constructor(private cfg: SacnConfig) {
     this.id = cfg.id
@@ -114,6 +117,10 @@ export class SacnOutput implements OutputDriver {
       this.sender = this.createSender()
       // Send an initial frame so the receiver sees the source immediately.
       await this.sender.send({ payload: toPayload(this.lastFrame) })
+      if (this.stopped) {
+        this.closeSender()
+        return
+      }
       this.state = { state: 'ok', fps: 0, lastSendAt: Date.now() }
       this.backoffMs = 1000
       log.info(`started universe ${this.universe} (${this.cfg.sacn.mode})`)
@@ -156,23 +163,35 @@ export class SacnOutput implements OutputDriver {
     // Send on change (rate-limited) and otherwise as a keep-alive so receivers never time out.
     if (!changed && now - this.lastSentAt < this.cfg.sacn.keepAliveMs) return
     if (changed && now - this.lastSentAt < this.minIntervalMs - 1) return
-    if (this.sending) return
+    if (this.sending) {
+      if (now - this.sendingSince < SacnOutput.SEND_STALL_MS) return
+      // The previous send() never settled — treat the sender as dead.
+      log.warn(`send stalled >${SacnOutput.SEND_STALL_MS} ms on U${this.universe}; restarting`)
+      this.sending = false
+      this.state = { ...this.state, state: 'error', reason: 'send stalled' }
+      this.scheduleRestart()
+      return
+    }
     this.lastSentAt = now
     this.sending = true
-    this.sender
+    this.sendingSince = now
+    const sender = this.sender
+    sender
       .send({ payload: toPayload(frame) })
       .then(() => {
+        if (this.sender !== sender) return
         this.lastSendTimes.push(Date.now())
         this.state.lastSendAt = Date.now()
         if (this.state.state !== 'ok')
           this.state = { ...this.state, state: 'ok', reason: undefined }
       })
       .catch((err) => {
+        if (this.sender !== sender) return
         this.state = { ...this.state, state: 'error', reason: friendlyErrorMessage(err) }
         this.scheduleRestart()
       })
       .finally(() => {
-        this.sending = false
+        if (this.sender === sender) this.sending = false
       })
   }
 

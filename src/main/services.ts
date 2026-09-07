@@ -60,11 +60,15 @@ export class Services extends EventEmitter {
   private subscribedUniverses = new Set<number>()
   private frameTick = 0
   private snapshotTimer: ReturnType<typeof setInterval> | null = null
+  private snapshotDebounce: ReturnType<typeof setTimeout> | null = null
   private lastSnapshotJson = ''
   private alertOverrides = new Map<string, string>()
   private powerBlockerId: number | null = null
   private startedAt = Date.now()
   private publishTimer: ReturnType<typeof setTimeout> | null = null
+  /** `universe:channel` → the timer that will clear an MQTT setChannel hold */
+  private testHoldTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  private stopped = false
 
   constructor(userData: string) {
     super()
@@ -85,7 +89,15 @@ export class Services extends EventEmitter {
       warn: (m) => this.toast('warn', m)
     })
     this.engine = new RulesEngine(this.runner)
-    this.scheduler = new Scheduler((now) => this.tick(now), 40)
+    this.scheduler = new Scheduler(
+      (now) => this.tick(now),
+      40,
+      (err, count) => {
+        log.error(`compositor tick error (#${count})`, err)
+        if (count === 1 || count % 200 === 0)
+          this.toast('error', `Lighting engine tick error: ${(err as Error).message ?? err}`)
+      }
+    )
   }
 
   // ------------------------------------------------------------------ lifecycle
@@ -109,9 +121,17 @@ export class Services extends EventEmitter {
       this.engine.setReferenceData(r)
       this.emit('refdata', r)
     })
-    this.thorium.on('scopeLeft', (simId: string) =>
-      this.compositor.release((i) => i.simulatorId === simId)
-    )
+    this.thorium.on('scopeLeft', (simId: string) => {
+      // Instances key on `simulator?.id ?? thoriumId` — for relative scenes that
+      // is the *profile* id, so releasing by the Thorium id alone misses every
+      // seeded alert scene. Release both keys for the departing simulator.
+      const profileId =
+        this.registry.profileByName(this.registry.thoriumSimulatorById(simId)?.name ?? '')?.id ??
+        null
+      this.compositor.release(
+        (i) => i.simulatorId === simId || (profileId != null && i.simulatorId === profileId)
+      )
+    })
     this.thorium.on('assignmentLost', (info: { previousFlight: string | null }) => {
       const behavior = this.store.active().thorium.unassignedBehavior
       if (behavior === 'release') {
@@ -153,7 +173,6 @@ export class Services extends EventEmitter {
     this.bus.onFirst((ev) => this.engine.onEvent(ev))
     this.bus.on((ev) => {
       this.log.append(ev)
-      if (ev.type === 'thorium.event') this.thorium.setSeenEventNames(this.log.seenEventNames())
       if (this.store.active().mqtt.publish.publishEvents) this.publisher.publishEvent(ev)
     })
     this.engine.setReferenceData(this.thorium.referenceData())
@@ -197,7 +216,15 @@ export class Services extends EventEmitter {
 
   async shutdown(): Promise<void> {
     log.info('shutting down')
+    this.stopped = true
     if (this.snapshotTimer) clearInterval(this.snapshotTimer)
+    this.snapshotTimer = null
+    if (this.snapshotDebounce) clearTimeout(this.snapshotDebounce)
+    this.snapshotDebounce = null
+    if (this.publishTimer) clearTimeout(this.publishTimer)
+    this.publishTimer = null
+    for (const t of this.testHoldTimers.values()) clearTimeout(t)
+    this.testHoldTimers.clear()
     this.scheduler.stop()
     if (this.store.settings().sendZeroFrameOnExit) await this.outputs.sendZeroAll()
     await this.outputs.stopAll()
@@ -293,20 +320,23 @@ export class Services extends EventEmitter {
         active: this.compositor.activeSummaries(),
         universes: this.compositor.universes()
       },
+      perf: {
+        eventsPerSec: this.bus.rate(),
+        schedulerFps: this.scheduler.achievedFps()
+      },
       mappingsStats: this.engine.statsSnapshot(),
       unresolvedMappings: Object.fromEntries(
-        this.engine.unresolved().map((u) => [u.mappingId, u.reason])
+        this.engine.unresolved().map((u) => [u.mappingId, { reason: u.reason, fatal: u.fatal }])
       ),
       alertOverrides: overrides
     }
   }
 
-  private snapshotPending = false
   private scheduleSnapshot(): void {
-    if (this.snapshotPending) return
-    this.snapshotPending = true
-    setTimeout(() => {
-      this.snapshotPending = false
+    if (this.snapshotDebounce || this.stopped) return
+    this.snapshotDebounce = setTimeout(() => {
+      this.snapshotDebounce = null
+      if (this.stopped) return
       const snap = this.snapshot()
       const json = JSON.stringify({ ...snap, ts: 0 })
       if (json !== this.lastSnapshotJson) {
@@ -318,7 +348,7 @@ export class Services extends EventEmitter {
   }
 
   private schedulePublish(): void {
-    if (this.publishTimer) return
+    if (this.publishTimer || this.stopped) return
     this.publishTimer = setTimeout(() => {
       this.publishTimer = null
       const p = this.store.active()
@@ -400,23 +430,32 @@ export class Services extends EventEmitter {
     const sim = this.registry.thoriumSimulatorByName(simulatorName)
     if (level) this.alertOverrides.set(simulatorName, level)
     else this.alertOverrides.delete(simulatorName)
-    const effective = level ?? sim?.alertLevel ?? '5'
-    this.bus.emit({
-      source: 'ui',
-      type: 'thorium.state',
-      name: 'alertLevel.changed',
-      simulatorId: sim?.id,
-      simulatorName,
-      data: {
-        level: effective,
-        rawLevel: effective,
-        training: false,
-        previous: null,
-        initial: false,
-        override: level != null,
-        simulatorName
-      }
-    })
+    // The level to re-assert: the override itself, or (when clearing it) the
+    // simulator's real current level. Never invent one — a fabricated '5' here
+    // latches the Alert 5 scene with no way to clear it.
+    const effective = level ?? sim?.alertLevel ?? null
+    if (effective != null) {
+      this.bus.emit({
+        source: 'ui',
+        type: 'thorium.state',
+        name: 'alertLevel.changed',
+        simulatorId: sim?.id,
+        simulatorName,
+        data: {
+          level: effective,
+          rawLevel: effective,
+          training: false,
+          previous: null,
+          initial: false,
+          override: level != null,
+          simulatorName
+        }
+      })
+    } else {
+      log.warn(
+        `alert override cleared for "${simulatorName}" but its current level is unknown; not re-asserting a level`
+      )
+    }
     this.bus.emit({
       source: 'ui',
       type: 'ui.action',
@@ -474,12 +513,20 @@ export class Services extends EventEmitter {
         this.setGrandMaster(cmd.value)
         return
       case 'setChannel': {
+        const key = `${cmd.universe}:${cmd.channel}`
+        const existing = this.testHoldTimers.get(key)
+        if (existing) {
+          clearTimeout(existing)
+          this.testHoldTimers.delete(key)
+        }
         this.compositor.setTestChannel(cmd.universe, cmd.channel, cmd.value)
-        if (cmd.holdMs)
-          setTimeout(
-            () => this.compositor.setTestChannel(cmd.universe, cmd.channel, null),
-            cmd.holdMs
-          )
+        if (cmd.holdMs) {
+          const t = setTimeout(() => {
+            this.testHoldTimers.delete(key)
+            this.compositor.setTestChannel(cmd.universe, cmd.channel, null)
+          }, cmd.holdMs)
+          this.testHoldTimers.set(key, t)
+        }
         return
       }
       case 'alertLevel':
@@ -601,7 +648,7 @@ export class Services extends EventEmitter {
           mappings: p.mappings.map((m) => ({
             name: m.name,
             enabled: m.enabled,
-            preset: m.trigger.preset
+            presets: m.triggers.map((t) => t.preset)
           }))
         }),
         null,
@@ -614,12 +661,31 @@ export class Services extends EventEmitter {
       JSON.stringify(snap, null, 2),
       '```',
       '',
+      '## Active compositor instances',
+      '```',
+      ...(this.compositor.getInstances().length
+        ? this.compositor.getInstances().map((i) => {
+            const chans = [...i.masks.entries()]
+              .map(([u, m]) => {
+                const set: number[] = []
+                for (let c = 1; c < m.length; c++) if (m[c]) set.push(c)
+                return set.length ? `U${u}:${summariseChannels(set)}` : null
+              })
+              .filter(Boolean)
+              .join(' ')
+            const layer = p.layers.find((l) => l.id === i.layerId)?.name ?? i.layerId
+            return `${layer.padEnd(10)} "${i.sceneName}" sim=${i.simulatorName ?? i.simulatorId ?? '-'} started=${new Date(i.startedAt).toISOString()}${i.releaseStartedAt ? ' (releasing)' : ''} ${chans}`
+          })
+        : ['- none']),
+      '```',
+      '',
       '## Unresolved triggers',
       ...(this.engine
         .unresolved()
-        .map((u) => `- ${p.mappings.find((m) => m.id === u.mappingId)?.name}: ${u.reason}`) || [
-        '- none'
-      ]),
+        .map(
+          (u) =>
+            `- ${p.mappings.find((m) => m.id === u.mappingId)?.name}: ${u.reason}${u.fatal ? '' : ' (partial — other triggers still fire)'}`
+        ) || ['- none']),
       '',
       '## Last 200 events',
       ...this.log
@@ -645,4 +711,24 @@ export class Services extends EventEmitter {
   layerIdForTest(): string {
     return LAYER_IDS.test
   }
+}
+
+/** "1,2,3,7,8" → "1-3,7-8" for the diagnostics channel dump. */
+function summariseChannels(chs: number[]): string {
+  if (chs.length === 0) return ''
+  const sorted = [...chs].sort((a, b) => a - b)
+  const runs: string[] = []
+  let start = sorted[0]
+  let prev = sorted[0]
+  for (let i = 1; i <= sorted.length; i++) {
+    const c = sorted[i]
+    if (c === prev + 1) {
+      prev = c
+      continue
+    }
+    runs.push(start === prev ? `${start}` : `${start}-${prev}`)
+    start = c
+    prev = c
+  }
+  return runs.join(',')
 }

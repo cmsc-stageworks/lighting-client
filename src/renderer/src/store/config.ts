@@ -19,6 +19,8 @@ interface ConfigStore {
   patchSettings: (patch: Partial<AppSettings>) => Promise<void>
 }
 
+let started = false
+
 export const useConfig = create<ConfigStore>((set, get) => ({
   config: null,
   draft: null,
@@ -26,6 +28,8 @@ export const useConfig = create<ConfigStore>((set, get) => ({
   saving: false,
   errors: [],
   init: async () => {
+    if (started) return
+    started = true
     const config = await invoke('config.get')
     set({ config, draft: activeOf(config), dirty: false })
     on('config:changed', (cfg) => {

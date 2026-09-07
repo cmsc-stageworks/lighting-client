@@ -12,6 +12,15 @@ let tray: Tray | null = null
 let services: Services | null = null
 let quitting = false
 
+// Last-resort safety net for an unattended kiosk: a stray rejected promise or a
+// thrown error in a callback must be logged, not silently kill the process.
+process.on('unhandledRejection', (reason) => {
+  getLogger('process').error('unhandled promise rejection', reason)
+})
+process.on('uncaughtException', (err) => {
+  getLogger('process').error('uncaught exception', err)
+})
+
 const gotLock = app.requestSingleInstanceLock()
 if (!gotLock) {
   app.quit()

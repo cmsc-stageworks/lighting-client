@@ -1,12 +1,15 @@
-import React, { useMemo } from 'react'
+import React, { useMemo, useState } from 'react'
 import clsx from 'clsx'
-import { Globe, Ship } from 'lucide-react'
-import type { Mapping } from '@shared/types/config'
+import { ChevronDown, ChevronRight, Globe, Plus, Ship, Trash2 } from 'lucide-react'
+import type { Mapping, Trigger } from '@shared/types/config'
 import { getPreset, summarizeTrigger } from '@shared/triggers/catalog'
+import { countLeafConditions, isConditionGroup } from '@shared/triggers/conditions'
 import { eqIgnoreCase } from '@shared/utils'
 import { useConfig } from '../../store/config'
 import { useRuntime } from '../../store/runtime'
 import {
+  Badge,
+  Button,
   Callout,
   Card,
   Field,
@@ -41,7 +44,7 @@ export function SimulatorChips({
     for (const s of profile?.simulators ?? []) add(s.name)
     for (const s of inScope ?? []) add(s.name)
     for (const s of refSims) add(s.name)
-    for (const m of profile?.mappings ?? []) for (const n of m.trigger.simulatorNames) add(n)
+    for (const m of profile?.mappings ?? []) for (const n of m.simulatorNames) add(n)
     for (const n of value) add(n)
     return out
   }, [profile, inScope, refSims, value])
@@ -91,6 +94,98 @@ export function SimulatorChips({
   )
 }
 
+/**
+ * One alternative in a mapping's OR list: the full trigger picker plus its own
+ * extra conditions, collapsed to a one-line summary when another one is open.
+ */
+function TriggerBlock({
+  trigger,
+  index,
+  total,
+  open,
+  onToggle,
+  onChange,
+  onRemove
+}: {
+  trigger: Trigger
+  index: number
+  total: number
+  open: boolean
+  onToggle: () => void
+  onChange: (t: Trigger) => void
+  onRemove: () => void
+}): React.JSX.Element {
+  const preset = getPreset(trigger.preset)
+  const eventName =
+    trigger.preset === 'custom.event' ? String(trigger.params.eventName ?? '') : undefined
+  const eventType = preset
+    ? preset.compile({ ...preset.defaults, ...trigger.params }, { refData: null }).types[0]
+    : undefined
+  const conditionCount = countLeafConditions(trigger.conditions)
+
+  // A "match every event" preset plus a negative-operator condition fires on every
+  // event that simply lacks the tested path (e.g. a `neq` on `level` matches every
+  // impact/sound macro). Warn so an operator does not build an accidental catch-all.
+  const negativeOnCatchAll =
+    trigger.preset === 'custom.any' &&
+    trigger.conditions.some((n) => {
+      const leaves = isConditionGroup(n) ? n.any : [n]
+      return leaves.some((c) => c.op === 'neq' || c.op === 'notExists')
+    })
+
+  return (
+    <div className={clsx('rounded-lg border', open ? 'border-accent/40' : 'border-border')}>
+      <div className="flex items-center gap-2 px-3 py-2">
+        <button
+          className="flex items-center gap-2 flex-1 min-w-0 text-left"
+          onClick={onToggle}
+          title={open ? 'Collapse' : 'Expand'}
+        >
+          {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+          <span className="text-[11px] uppercase tracking-wide text-faint w-5">
+            {index === 0 ? 'if' : 'or'}
+          </span>
+          <span className="truncate text-[13px]">
+            {preset ? summarizeTrigger(trigger.preset, trigger.params) : 'Choose a trigger…'}
+          </span>
+          {conditionCount > 0 && <Badge tone="muted">+{conditionCount} cond.</Badge>}
+        </button>
+        {total > 1 && (
+          <Button
+            size="sm"
+            variant="ghost"
+            title="Remove this trigger"
+            icon={<Trash2 size={13} />}
+            onClick={onRemove}
+          />
+        )}
+      </div>
+      {open && (
+        <div className="px-3 pb-3 border-t border-border pt-3">
+          <TriggerPicker value={trigger} onChange={onChange} />
+          <div className="mt-4 pt-4 border-t border-border">
+            <div className="field-label">Extra conditions on the event data</div>
+            <ConditionBuilder
+              conditions={trigger.conditions}
+              onChange={(c) => onChange({ ...trigger, conditions: c })}
+              eventName={eventName}
+              eventType={eventType}
+            />
+            {negativeOnCatchAll && (
+              <Callout tone="warning" className="mt-3">
+                This trigger matches <em>every</em> Thorium event, and a “does not equal” / “does
+                not exist” condition also passes for events that don’t carry that field at all — so
+                this mapping will fire on impact sounds, shakes and other unrelated macros. Narrow
+                it with a specific event name or a positive condition.
+              </Callout>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function MappingEditor({
   mapping,
   onChange
@@ -101,24 +196,39 @@ export function MappingEditor({
   const profile = useConfig((s) => s.draft)!
   const dirty = useConfig((s) => s.dirty)
   const unresolved = useRuntime((s) => s.snapshot?.unresolvedMappings[mapping.id])
-  const preset = getPreset(mapping.trigger.preset)
-  const eventName =
-    mapping.trigger.preset === 'custom.event'
-      ? String(mapping.trigger.params.eventName ?? '')
-      : undefined
-  const eventType = preset
-    ? preset.compile({ ...preset.defaults, ...mapping.trigger.params }, { refData: null }).types[0]
-    : undefined
   const categories = useMemo(
     () => [...new Set(profile.mappings.map((m) => m.category || 'General'))].sort(),
     [profile.mappings]
   )
-  const sims = mapping.trigger.simulatorNames
+  const sims = mapping.simulatorNames
+  const triggers = mapping.triggers
+  // Only one trigger is expanded at a time so a multi-trigger mapping stays readable;
+  // a single-trigger mapping looks exactly like it always did.
+  const [open, setOpen] = useState(0)
+
+  const setTriggers = (next: Trigger[]): void => onChange({ ...mapping, triggers: next })
+  const setTrigger = (i: number, t: Trigger): void =>
+    setTriggers(triggers.map((x, k) => (k === i ? t : x)))
+  const addTrigger = (): void => {
+    setTriggers([
+      ...triggers,
+      { preset: 'custom.event', params: { eventName: '' }, conditions: [] }
+    ])
+    setOpen(triggers.length)
+  }
+  const removeTrigger = (i: number): void => {
+    setTriggers(triggers.filter((_, k) => k !== i))
+    setOpen((o) => (o >= i && o > 0 ? o - 1 : o))
+  }
 
   return (
     <div className="flex flex-col gap-4">
       {unresolved && !dirty && mapping.enabled && (
-        <Callout tone="danger">This mapping cannot fire right now: {unresolved}</Callout>
+        <Callout tone={unresolved.fatal ? 'danger' : 'warning'}>
+          {unresolved.fatal
+            ? `This mapping cannot fire right now: ${unresolved.reason}`
+            : `Part of this mapping cannot fire right now (${unresolved.reason}) — its other triggers still work.`}
+        </Callout>
       )}
       <Card>
         <div className="grid grid-cols-[1fr_220px_auto_auto] gap-4 items-end">
@@ -162,9 +272,7 @@ export function MappingEditor({
           <div className="field-label">Applies to</div>
           <SimulatorChips
             value={sims}
-            onChange={(names) =>
-              onChange({ ...mapping, trigger: { ...mapping.trigger, simulatorNames: names } })
-            }
+            onChange={(names) => onChange({ ...mapping, simulatorNames: names })}
           />
           <div className="text-[12px] text-faint mt-2">
             {sims.length === 0
@@ -175,30 +283,38 @@ export function MappingEditor({
       </Card>
 
       <Card>
-        <SectionTitle>1 · When</SectionTitle>
-        <TriggerPicker
-          value={mapping.trigger}
-          onChange={(t) => onChange({ ...mapping, trigger: t })}
-        />
-        <div className="mt-4 pt-4 border-t border-border">
-          <div className="field-label">Extra conditions on the event data</div>
-          <ConditionBuilder
-            conditions={mapping.trigger.conditions}
-            onChange={(c) =>
-              onChange({ ...mapping, trigger: { ...mapping.trigger, conditions: c } })
-            }
-            eventName={eventName}
-            eventType={eventType}
-          />
+        <div className="flex items-center justify-between">
+          <SectionTitle className="!mb-0">1 · When</SectionTitle>
+          {triggers.length > 1 && (
+            <span className="text-[12px] text-muted">
+              Fires when <span className="text-text font-medium">any</span> of these happens
+            </span>
+          )}
         </div>
-        <div className="mt-3 text-[13px] text-muted">
+        <div className="flex flex-col gap-2 mt-3">
+          {triggers.map((t, i) => (
+            <TriggerBlock
+              key={i}
+              trigger={t}
+              index={i}
+              total={triggers.length}
+              open={open === i}
+              onToggle={() => setOpen(open === i ? -1 : i)}
+              onChange={(next) => setTrigger(i, next)}
+              onRemove={() => removeTrigger(i)}
+            />
+          ))}
+        </div>
+        <div className="mt-3">
+          <Button size="sm" variant="ghost" icon={<Plus size={13} />} onClick={addTrigger}>
+            Add another trigger (or)
+          </Button>
+        </div>
+        <div className="mt-3 pt-3 border-t border-border text-[13px] text-muted">
           Summary:{' '}
           <span className="text-text">
-            {summarizeTrigger(mapping.trigger.preset, mapping.trigger.params)}
+            {triggers.map((t) => summarizeTrigger(t.preset, t.params)).join(' — or — ')}
           </span>
-          {mapping.trigger.conditions.length > 0 && (
-            <span> + {mapping.trigger.conditions.length} condition(s)</span>
-          )}
           <span> · {sims.length ? sims.join(', ') : 'any simulator'}</span>
         </div>
       </Card>

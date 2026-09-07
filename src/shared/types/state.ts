@@ -71,15 +71,27 @@ export interface CompositorRuntime {
   universes: number[]
 }
 
+export interface PerfRuntime {
+  /** events published on the bus per second (5 s window) */
+  eventsPerSec: number
+  /** compositor ticks actually achieved per second (2 s window) */
+  schedulerFps: number
+}
+
 export interface RuntimeSnapshot {
   ts: number
   thorium: ThoriumRuntime
   mqtt: MqttRuntime
   outputs: Record<string, OutputHealth>
   compositor: CompositorRuntime
+  perf: PerfRuntime
   mappingsStats: Record<string, { lastFiredAt: number | null; count: number }>
-  /** mappingId → reason the trigger cannot currently match (e.g. macro name not found) */
-  unresolvedMappings: Record<string, string>
+  /**
+   * mappingId → why its trigger(s) cannot currently match (e.g. macro name not found).
+   * `fatal` means no trigger can fire at all; otherwise only some alternatives of a
+   * multi-trigger mapping are dead and the rest still work.
+   */
+  unresolvedMappings: Record<string, { reason: string; fatal: boolean }>
   alertOverrides: Record<string, string>
 }
 

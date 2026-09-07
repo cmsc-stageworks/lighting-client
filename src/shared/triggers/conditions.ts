@@ -1,5 +1,17 @@
-import type { Condition } from '../schema/config.schema'
+import type { Condition, ConditionNode } from '../schema/config.schema'
 import { globToRegExp, resolvePath } from '../utils'
+
+/** A node is an "any of" group when it carries an `any` array; otherwise it is a leaf condition. */
+export function isConditionGroup(n: ConditionNode): n is { any: Condition[] } {
+  return Array.isArray((n as { any?: unknown }).any)
+}
+
+/** Total number of leaf conditions across a node list (groups counted by their contents). */
+export function countLeafConditions(nodes: ConditionNode[]): number {
+  let n = 0
+  for (const node of nodes) n += isConditionGroup(node) ? node.any.length : 1
+  return n
+}
 
 const regexCache = new Map<string, RegExp | null>()
 
@@ -100,8 +112,19 @@ function evalScalar(c: Condition, value: unknown): boolean {
   }
 }
 
-export function evalConditions(conditions: Condition[], data: unknown): boolean {
-  for (const c of conditions) if (!evalCondition(c, data)) return false
+/**
+ * Evaluate a trigger condition list against event data. Nodes are ANDed; an
+ * "any of" group passes when any of its leaves passes. An empty group cannot
+ * exist (the schema requires `min(1)`), but is treated as "no constraint".
+ */
+export function evalConditions(nodes: ConditionNode[], data: unknown): boolean {
+  for (const n of nodes) {
+    if (isConditionGroup(n)) {
+      if (n.any.length > 0 && !n.any.some((c) => evalCondition(c, data))) return false
+    } else if (!evalCondition(n, data)) {
+      return false
+    }
+  }
   return true
 }
 

@@ -15,6 +15,7 @@ import {
 import type { Action, Mapping } from '@shared/types/config'
 import type { AppEvent } from '@shared/types/events'
 import { getPreset, PRESET_GROUPS, summarizeTrigger } from '@shared/triggers/catalog'
+import { countLeafConditions } from '@shared/triggers/conditions'
 import { eqIgnoreCase, uuid } from '@shared/utils'
 import { useConfig } from '../../store/config'
 import { useRuntime } from '../../store/runtime'
@@ -67,63 +68,57 @@ function describeAction(
 
 /** Build a sensible new mapping from an inspector event. */
 function mappingFromEvent(e: AppEvent, firstSceneId: string | undefined): Mapping {
-  let trigger: Mapping['trigger']
+  let trigger: Mapping['triggers'][number]
   const sims = e.simulatorName ? [e.simulatorName] : []
   if (e.type === 'mqtt.message')
     trigger = {
       preset: 'mqtt.message',
       params: { topic: e.name },
-      conditions: [],
-      simulatorNames: []
+      conditions: []
     }
   else if (e.type === 'thorium.state' && e.name === 'alertLevel.changed')
     trigger = {
       preset: 'thorium.alertLevel',
       params: { levels: [String(e.data.level ?? '5')], includeInitial: true },
-      conditions: [],
-      simulatorNames: sims
+      conditions: []
     }
   else if (e.type === 'thorium.event' && e.name === 'generic')
     trigger = {
       preset: 'thorium.generic',
       params: { key: String(e.data.key ?? '') },
-      conditions: [],
-      simulatorNames: sims
+      conditions: []
     }
   else if (e.type === 'thorium.event' && e.name === 'triggerAction')
     trigger = {
       preset: 'thorium.action',
       params: { actions: [String(e.data.action ?? 'flash')] },
-      conditions: [],
-      simulatorNames: sims
+      conditions: []
     }
   else if (e.type === 'thorium.event' && e.name === 'triggerMacroAction')
     trigger = {
       preset: 'custom.event',
       params: { eventName: e.name },
-      conditions: [{ path: 'macroId', op: 'eq', value: String(e.data.macroId ?? '') }],
-      simulatorNames: sims
+      conditions: [{ path: 'macroId', op: 'eq', value: String(e.data.macroId ?? '') }]
     }
   else if (e.type === 'thorium.event')
     trigger = {
       preset: 'custom.event',
       params: { eventName: e.name },
-      conditions: [],
-      simulatorNames: sims
+      conditions: []
     }
   else
     trigger = {
       preset: 'custom.any',
       params: {},
-      conditions: [{ path: 'event', op: 'eq', value: e.name }],
-      simulatorNames: sims
+      conditions: [{ path: 'event', op: 'eq', value: e.name }]
     }
   return {
     id: uuid(),
     name: `On ${e.name}${e.simulatorName ? ` (${e.simulatorName})` : ''}`,
     enabled: true,
     category: e.simulatorName ?? 'General',
-    trigger,
+    triggers: [trigger],
+    simulatorNames: sims,
     actions: firstSceneId
       ? [
           {
@@ -177,7 +172,7 @@ export function MappingsPage(): React.JSX.Element {
     }
     for (const s of profile?.simulators ?? []) add(s.name)
     for (const s of snapshot?.thorium.simulatorsInScope ?? []) add(s.name)
-    for (const m of profile?.mappings ?? []) for (const n of m.trigger.simulatorNames) add(n)
+    for (const m of profile?.mappings ?? []) for (const n of m.simulatorNames) add(n)
     return out
   }, [profile, snapshot])
   const categories = useMemo(
@@ -188,15 +183,16 @@ export function MappingsPage(): React.JSX.Element {
   const filtered = useMemo(() => {
     const list = profile?.mappings ?? []
     return list.filter((m) => {
-      if (simFilter === ANY && m.trigger.simulatorNames.length > 0) return false
+      if (simFilter === ANY && m.simulatorNames.length > 0) return false
       if (
         simFilter &&
         simFilter !== ANY &&
-        !m.trigger.simulatorNames.some((n) => eqIgnoreCase(n, simFilter))
+        !m.simulatorNames.some((n) => eqIgnoreCase(n, simFilter))
       )
         return false
       if (catFilter && (m.category || 'General') !== catFilter) return false
-      if (groupFilter && getPreset(m.trigger.preset)?.group !== groupFilter) return false
+      if (groupFilter && !m.triggers.some((t) => getPreset(t.preset)?.group === groupFilter))
+        return false
       const stats = snapshot?.mappingsStats[m.id]
       const unresolved = !!snapshot?.unresolvedMappings[m.id]
       if (statusFilter === 'enabled' && !m.enabled) return false
@@ -209,8 +205,8 @@ export function MappingsPage(): React.JSX.Element {
         const hay = [
           m.name,
           m.category,
-          summarizeTrigger(m.trigger.preset, m.trigger.params),
-          ...m.trigger.simulatorNames,
+          ...m.triggers.map((t) => summarizeTrigger(t.preset, t.params)),
+          ...m.simulatorNames,
           m.notes
         ]
           .join(' ')
@@ -231,12 +227,14 @@ export function MappingsPage(): React.JSX.Element {
       name: `New mapping${simNames.length ? ' – ' + simNames.join(', ') : ''}`,
       enabled: true,
       category: catFilter || 'General',
-      trigger: {
-        preset: 'thorium.alertLevel',
-        params: { levels: ['1'], includeInitial: true },
-        conditions: [],
-        simulatorNames: simNames
-      },
+      triggers: [
+        {
+          preset: 'thorium.alertLevel',
+          params: { levels: ['1'], includeInitial: true },
+          conditions: []
+        }
+      ],
+      simulatorNames: simNames,
       actions: profile.scenes[0]
         ? [
             {
@@ -259,7 +257,8 @@ export function MappingsPage(): React.JSX.Element {
       ...m,
       id: uuid(),
       name: `${m.name} copy`,
-      trigger: { ...m.trigger, simulatorNames: [...m.trigger.simulatorNames] }
+      triggers: m.triggers.map((t) => ({ ...t })),
+      simulatorNames: [...m.simulatorNames]
     }
     update((d) => ({ ...d, mappings: [...d.mappings, copy] }))
     setEditing(copy.id)
@@ -294,13 +293,12 @@ export function MappingsPage(): React.JSX.Element {
     const copies: Mapping[] = []
     for (const m of src) {
       for (const sim of targets) {
-        if (m.trigger.simulatorNames.length === 1 && eqIgnoreCase(m.trigger.simulatorNames[0], sim))
-          continue
+        if (m.simulatorNames.length === 1 && eqIgnoreCase(m.simulatorNames[0], sim)) continue
         copies.push({
           ...m,
           id: uuid(),
           name: `${m.name.replace(/\s+–\s+[^–]+$/, '')} – ${sim}`,
-          trigger: { ...m.trigger, simulatorNames: [sim] }
+          simulatorNames: [sim]
         })
       }
     }
@@ -338,6 +336,8 @@ export function MappingsPage(): React.JSX.Element {
           }
         />
         <MappingEditor
+          // Remount per mapping so the editor's expanded-trigger state starts fresh.
+          key={m.id}
           mapping={m}
           onChange={(next) =>
             update((d) => ({
@@ -353,7 +353,7 @@ export function MappingsPage(): React.JSX.Element {
   // Grouping
   const groups: { key: string; label: React.ReactNode; items: Mapping[] }[] = []
   if (groupBySim) {
-    const anyItems = filtered.filter((m) => m.trigger.simulatorNames.length === 0)
+    const anyItems = filtered.filter((m) => m.simulatorNames.length === 0)
     if (anyItems.length)
       groups.push({
         key: ANY,
@@ -364,11 +364,11 @@ export function MappingsPage(): React.JSX.Element {
         ),
         items: anyItems
       })
-    const names = [...new Set(filtered.flatMap((m) => m.trigger.simulatorNames))].sort((a, b) =>
+    const names = [...new Set(filtered.flatMap((m) => m.simulatorNames))].sort((a, b) =>
       a.localeCompare(b)
     )
     for (const n of names) {
-      const items = filtered.filter((m) => m.trigger.simulatorNames.some((x) => eqIgnoreCase(x, n)))
+      const items = filtered.filter((m) => m.simulatorNames.some((x) => eqIgnoreCase(x, n)))
       groups.push({
         key: n,
         label: (
@@ -391,7 +391,9 @@ export function MappingsPage(): React.JSX.Element {
         !profile.scenes.some((s) => s.id === a.sceneId)
     )
     const unresolved = snapshot?.unresolvedMappings[m.id]
-    const sims = m.trigger.simulatorNames
+    const sims = m.simulatorNames
+    const triggerSummaries = m.triggers.map((t) => summarizeTrigger(t.preset, t.params))
+    const conditionCount = m.triggers.reduce((n, t) => n + countLeafConditions(t.conditions), 0)
     return (
       <tr
         key={m.id}
@@ -417,8 +419,11 @@ export function MappingsPage(): React.JSX.Element {
               </span>
             )}
             {unresolved && m.enabled && (
-              <span title={unresolved}>
-                <AlertTriangle size={14} className="text-danger" />
+              <span title={unresolved.reason}>
+                <AlertTriangle
+                  size={14}
+                  className={unresolved.fatal ? 'text-danger' : 'text-warning'}
+                />
               </span>
             )}
             {m.actions.length === 0 && <Badge tone="warning">no actions</Badge>}
@@ -438,9 +443,13 @@ export function MappingsPage(): React.JSX.Element {
           </div>
         </td>
         <td className="px-3 py-2.5 text-muted">
-          {summarizeTrigger(m.trigger.preset, m.trigger.params)}
-          {m.trigger.conditions.length > 0 && (
-            <span className="text-faint"> +{m.trigger.conditions.length} cond.</span>
+          {summarizeTrigger(m.triggers[0].preset, m.triggers[0].params)}
+          {conditionCount > 0 && <span className="text-faint"> +{conditionCount} cond.</span>}
+          {m.triggers.length > 1 && (
+            <span className="text-faint" title={triggerSummaries.join(' — or — ')}>
+              {' '}
+              or +{m.triggers.length - 1}
+            </span>
           )}
         </td>
         <td className="px-3 py-2.5 text-muted">

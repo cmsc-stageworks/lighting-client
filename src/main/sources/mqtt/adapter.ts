@@ -197,17 +197,36 @@ export class MqttAdapter extends EventEmitter {
     const c = this.client
     this.client = null
     if (c) {
+      // Detach handlers first so a `close` fired by end() cannot emit a phantom
+      // `mqtt.disconnected` bus event (which could trip user mappings).
+      c.removeAllListeners()
+      c.on('error', () => {})
       if (publishOffline && c.connected && this.settings.publish.enabled) {
-        await new Promise<void>((resolve) =>
-          c.publish(
-            `${this.baseTopic()}/status`,
-            JSON.stringify({ online: false }),
-            { qos: this.settings.publish.qos, retain: true },
-            () => resolve()
-          )
+        await withTimeout(
+          new Promise<void>((resolve) =>
+            c.publish(
+              `${this.baseTopic()}/status`,
+              JSON.stringify({ online: false }),
+              { qos: this.settings.publish.qos, retain: true },
+              () => resolve()
+            )
+          ),
+          1500
         )
       }
-      await new Promise<void>((resolve) => c.end(false, {}, () => resolve()))
+      // c.end(false) waits for the outgoing queue to flush — against a half-open
+      // socket that never resolves and would hang config changes and app quit.
+      const ended = await withTimeout(
+        new Promise<void>((resolve) => c.end(false, {}, () => resolve())),
+        2000
+      )
+      if (!ended) {
+        try {
+          c.end(true)
+        } catch {
+          /* ignore */
+        }
+      }
     }
     this.setState({ state: 'disabled', connectedSince: null })
   }
@@ -259,7 +278,12 @@ export class MqttAdapter extends EventEmitter {
     const report: MqttTestReport = { ok: false, steps, durationMs: 0, broker: this.settings.url }
     const result = await new Promise<{ ok: boolean; detail: string }>((resolve) => {
       let c: MqttClient | null = null
+      let settled = false
+      let timer: ReturnType<typeof setTimeout> | null = null
       const done = (ok: boolean, detail: string): void => {
+        if (settled) return
+        settled = true
+        if (timer) clearTimeout(timer)
         try {
           c?.end(true)
         } catch {
@@ -280,7 +304,7 @@ export class MqttAdapter extends EventEmitter {
         })
         c.on('connect', () => done(true, 'connected and authenticated'))
         c.on('error', (err) => done(false, err.message))
-        setTimeout(() => done(false, 'timed out after 5 s'), 6000)
+        timer = setTimeout(() => done(false, 'timed out after 5 s'), 6000)
       } catch (err) {
         done(false, (err as Error).message)
       }
@@ -316,4 +340,22 @@ export class MqttAdapter extends EventEmitter {
     report.durationMs = Date.now() - started
     return report
   }
+}
+
+/** Resolve to `true` if `p` settles first, `false` if the timeout wins. Never rejects. */
+function withTimeout(p: Promise<unknown>, ms: number): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    const t = setTimeout(() => resolve(false), ms)
+    if (typeof t.unref === 'function') t.unref()
+    p.then(
+      () => {
+        clearTimeout(t)
+        resolve(true)
+      },
+      () => {
+        clearTimeout(t)
+        resolve(true)
+      }
+    )
+  })
 }

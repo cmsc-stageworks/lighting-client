@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import type { Condition } from '../schema/config.schema'
+import type { Condition, ConditionNode } from '../schema/config.schema'
 import type { EventType } from '../types/events'
 import type { ReferenceData } from '../types/state'
 import { ALERT_LEVELS, LIGHTING_ACTIONS, THORIUM_TRIGGER_ACTIONS } from '../constants'
@@ -52,7 +52,7 @@ export interface CompileContext {
 export interface CompiledBase {
   types: EventType[]
   names?: string[]
-  conditions: Condition[]
+  conditions: ConditionNode[]
   unresolved?: string
 }
 
@@ -90,6 +90,15 @@ function list(v: unknown): string[] {
   return Array.isArray(v) ? v.map(String) : []
 }
 
+/**
+ * `path eq` one of `values`: a single equality for one value, an "any of" group
+ * for several. Replaces the older `^(a|b)$` alternation regexes.
+ */
+function anyEquals(path: string, values: string[]): ConditionNode {
+  if (values.length === 1) return { path, op: 'eq', value: values[0] }
+  return { any: values.map((v) => ({ path, op: 'eq', value: v })) }
+}
+
 const presets: TriggerPreset[] = [
   // ------------------------------------------------------------------ Alert
   {
@@ -125,10 +134,7 @@ const presets: TriggerPreset[] = [
     defaults: { levels: ['1'], includeInitial: true },
     summarize: (p) => `Alert level → ${list(p.levels).join(', ')}`,
     compile: (p) => {
-      const conds: Condition[] =
-        list(p.levels).length === 1
-          ? [{ path: 'level', op: 'eq', value: list(p.levels)[0] }]
-          : [{ path: 'level', op: 'regex', value: `^(${list(p.levels).join('|')})$` }]
+      const conds: ConditionNode[] = [anyEquals('level', list(p.levels))]
       if (p.includeInitial === false) conds.push({ path: 'initial', op: 'eq', value: false })
       return { types: ['thorium.state'], names: ['alertLevel.changed'], conditions: conds }
     }
@@ -176,7 +182,7 @@ const presets: TriggerPreset[] = [
     compile: (p) => ({
       types: ['thorium.state'],
       names: ['lighting.actionChanged'],
-      conditions: [{ path: 'action', op: 'regex', value: `^(${list(p.actions).join('|')})$` }]
+      conditions: [anyEquals('action', list(p.actions))]
     })
   },
   {
@@ -205,6 +211,68 @@ const presets: TriggerPreset[] = [
       names: ['lighting.intensityChanged'],
       conditions: [{ path: 'intensity', op: p.op as Condition['op'], value: Number(p.value) }]
     })
+  },
+  {
+    key: 'thorium.shake',
+    label: 'Shake lights (short / long)',
+    group: 'Lighting',
+    description:
+      'Fires on the Lighting core Shake button and on macro "Set Effect → shake". Stock Thorium sends 5000 ms for "Short" and 15000 ms for "Long"; the split threshold is 10 s. Fires on every press (a repeated shake re-triggers).',
+    paramsSchema: z.object({
+      length: z.enum(['any', 'short', 'long', 'exact']).default('any'),
+      exactMs: z.number().int().min(0).default(5000)
+    }),
+    fields: [
+      {
+        key: 'length',
+        label: 'Length',
+        kind: 'select',
+        options: opt(['any', 'short', 'long', 'exact'], {
+          any: 'Any shake',
+          short: 'Short (≤ 10 s)',
+          long: 'Long (> 10 s)',
+          exact: 'Exact duration (ms)'
+        })
+      },
+      {
+        key: 'exactMs',
+        label: 'Exact duration (ms)',
+        kind: 'number',
+        min: 0,
+        step: 500,
+        help: 'Only used when Length is "Exact duration". Stock buttons are 5000 and 15000.'
+      }
+    ],
+    defaults: { length: 'any', exactMs: 5000 },
+    summarize: (p) =>
+      p.length === 'exact'
+        ? `Shake ${p.exactMs} ms`
+        : p.length === 'any'
+          ? 'Any shake'
+          : `${p.length === 'short' ? 'Short' : 'Long'} shake`,
+    compile: (p) => {
+      // Both the dedicated shake mutation (no `effect` field) and a macro
+      // `lightingSetEffect` with effect=shake represent a shake; a plain
+      // `lightingSetEffect` for another effect (or the auto-cancel back to
+      // "normal") must not match.
+      const conditions: ConditionNode[] = [
+        {
+          any: [
+            { path: 'event', op: 'eq', value: 'lightingShakeLights' },
+            { path: 'effect', op: 'eq', value: 'shake' }
+          ]
+        }
+      ]
+      if (p.length === 'short') conditions.push({ path: 'duration', op: 'lte', value: 10000 })
+      else if (p.length === 'long') conditions.push({ path: 'duration', op: 'gt', value: 10000 })
+      else if (p.length === 'exact')
+        conditions.push({ path: 'duration', op: 'eq', value: Number(p.exactMs ?? 0) })
+      return {
+        types: ['thorium.event'],
+        names: ['lightingShakeLights', 'lightingSetEffect'],
+        conditions
+      }
+    }
   },
   // ----------------------------------------------------------------- Macros
   {
@@ -352,7 +420,7 @@ const presets: TriggerPreset[] = [
     compile: (p) => ({
       types: ['thorium.event'],
       names: ['triggerAction'],
-      conditions: [{ path: 'action', op: 'regex', value: `^(${list(p.actions).join('|')})$` }]
+      conditions: [anyEquals('action', list(p.actions))]
     })
   },
   {

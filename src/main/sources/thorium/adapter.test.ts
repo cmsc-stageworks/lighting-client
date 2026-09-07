@@ -289,6 +289,25 @@ describe('ThoriumAdapter (integration against a fake Thorium)', () => {
     expect(events.some((e) => e.name === 'generic')).toBe(false)
   })
 
+  it('does not re-fire an initial alert change across a reconnect', async () => {
+    adapter.start()
+    await until(() => events.some((e) => e.name === 'alertLevel.changed'))
+    const before = events.filter((e) => e.name === 'alertLevel.changed').length
+    const startsBefore = fake.started.filter((s) => s.op === 'events').length
+
+    adapter.reconnect()
+    await wait(50)
+    await until(() => adapter.runtime().state === 'connected', 5000)
+    await wait(200)
+
+    // The simulator's level is unchanged, so no new alertLevel.changed — and in
+    // particular none with initial:true that would re-latch the alert scene.
+    const after = events.filter((e) => e.name === 'alertLevel.changed')
+    expect(after.length).toBe(before)
+    // Exactly one events-firehose subscription per connection, not doubled.
+    expect(fake.started.filter((s) => s.op === 'events').length).toBe(startsBefore + 1)
+  })
+
   it('reports a useful connection test', async () => {
     adapter.start()
     await until(() => adapter.runtime().state === 'connected')

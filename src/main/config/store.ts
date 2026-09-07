@@ -71,6 +71,8 @@ export class ConfigStore extends EventEmitter {
     }
     try {
       const parsedJson = JSON.parse(raw) as Record<string, unknown>
+      const fromVersion =
+        typeof parsedJson.schemaVersion === 'number' ? parsedJson.schemaVersion : 0
       const { migrated, applied } = migrateConfig(parsedJson)
       const result = AppConfigSchema.safeParse(migrated)
       if (!result.success) {
@@ -80,7 +82,17 @@ export class ConfigStore extends EventEmitter {
       }
       this.config = result.data
       if (applied.length) {
-        log.info(`migrated config to version ${CONFIG_SCHEMA_VERSION}`)
+        // Keep an unpruned, clearly-labelled copy of the file exactly as it was
+        // before the upgrade, so downgrading the app to a schema-v${fromVersion}
+        // build has an untouched config to fall back to.
+        const preUpgrade = join(this.backupDir, `config-preupgrade-v${fromVersion}-${stamp()}.json`)
+        try {
+          await fs.writeFile(preUpgrade, raw, 'utf8')
+          log.info(`saved pre-upgrade config copy to ${basename(preUpgrade)}`)
+        } catch (e) {
+          log.warn(`could not write pre-upgrade config copy: ${(e as Error).message}`)
+        }
+        log.info(`migrated config from version ${fromVersion} to ${CONFIG_SCHEMA_VERSION}`)
         await this.persist()
       }
     } catch (err) {
@@ -132,7 +144,12 @@ export class ConfigStore extends EventEmitter {
 
   private async pruneBackups(): Promise<void> {
     const files = (await fs.readdir(this.backupDir)).filter(
-      (f) => f.startsWith('config-') && f.endsWith('.json') && !f.includes('broken')
+      (f) =>
+        f.startsWith('config-') &&
+        f.endsWith('.json') &&
+        !f.includes('broken') &&
+        // Pre-upgrade snapshots are kept indefinitely — they are the downgrade path.
+        !f.includes('preupgrade')
     )
     files.sort()
     const excess = files.length - BACKUP_KEEP
@@ -241,7 +258,7 @@ export class ConfigStore extends EventEmitter {
       } {
     const raw = JSON.parse(text) as Record<string, unknown>
     if (raw.kind === 'partial') {
-      const parsed = PartialConfigSchema.safeParse(raw)
+      const parsed = PartialConfigSchema.safeParse(migratePartial(raw))
       if (!parsed.success) throw new Error(parsed.error.issues.map((i) => i.message).join('; '))
       const active = this.active()
       const added: Record<string, number> = {}
@@ -434,4 +451,21 @@ function describeIssues(
 
 function stamp(): string {
   return new Date().toISOString().replace(/[:.]/g, '-')
+}
+
+/**
+ * Bring an older partial import/export document up to the current schema version.
+ * Its `mappings` are run through the same migration steps as a full config by
+ * wrapping them in a throwaway profile.
+ */
+function migratePartial(raw: Record<string, unknown>): Record<string, unknown> {
+  const version = typeof raw.schemaVersion === 'number' ? raw.schemaVersion : 0
+  if (version >= CONFIG_SCHEMA_VERSION) return raw
+  const wrapped = {
+    schemaVersion: version,
+    profiles: [{ mappings: Array.isArray(raw.mappings) ? raw.mappings : [] }]
+  }
+  const { migrated } = migrateConfig(wrapped)
+  const profile = (migrated.profiles as Record<string, unknown>[])[0]
+  return { ...raw, schemaVersion: CONFIG_SCHEMA_VERSION, mappings: profile.mappings }
 }

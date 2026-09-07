@@ -7,6 +7,16 @@ export type EventSource = 'thorium' | 'mqtt' | 'ui' | 'system'
  * (Thorium event name, MQTT topic, UI action, derived state event name) and `data`
  * is what trigger conditions resolve their paths against.
  */
+/** One matched mapping and the actions it ran for an event — for "why did this fire" in the inspector. */
+export interface EventTrace {
+  mappingId: string
+  mappingName: string
+  /** human descriptions of each action, e.g. `Activate "Alert 5 – Normal"` */
+  actions: string[]
+  /** true when the mapping matched but was skipped by its debounce */
+  debounced?: boolean
+}
+
 export interface AppEvent {
   id: string
   ts: number
@@ -17,6 +27,8 @@ export interface AppEvent {
   simulatorName?: string
   data: Record<string, unknown>
   matchedMappingIds: string[]
+  /** populated by the rules engine as it evaluates the event */
+  trace?: EventTrace[]
 }
 
 export type EventType = 'thorium.event' | 'thorium.state' | 'mqtt.message' | 'ui.action' | 'system'

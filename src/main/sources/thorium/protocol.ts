@@ -80,16 +80,31 @@ export class SubscriptionsClient extends EventEmitter {
     }
     this.ws = ws
     this.acked = false
+    // Every handler is bound to `ws`; once `this.ws` points at a newer socket this
+    // one has been superseded (e.g. by reconnectNow) and its events are ignored so
+    // it can never mutate shared state or stop the replacement's timers.
     ws.on('open', () => {
+      if (this.ws !== ws) return
       this.send({ type: 'connection_init', payload: this.connectionParams() })
     })
-    ws.on('message', (raw) => this.onMessage(raw.toString()))
+    ws.on('message', (raw) => {
+      if (this.ws !== ws) return
+      this.onMessage(raw.toString())
+    })
     ws.on('error', (err) => {
+      if (this.ws !== ws) return
       log.debug(`socket error: ${err.message}`)
       this.emit('error', err)
     })
-    ws.on('pong', () => this.resetKa())
+    ws.on('pong', () => {
+      if (this.ws !== ws) return
+      this.resetKa()
+    })
     ws.on('close', (code, reason) => {
+      if (this.ws !== ws) {
+        // Superseded socket finally closed; nothing to do, its listeners are gone.
+        return
+      }
       const wasAcked = this.acked
       this.ws = null
       this.acked = false
@@ -170,9 +185,13 @@ export class SubscriptionsClient extends EventEmitter {
   /** Any sign of life (pong, ka, data) pushes the dead-socket deadline out. */
   private resetKa(): void {
     this.clearKa()
+    const ws = this.ws
     this.kaTimer = setTimeout(() => {
+      // Only terminate the socket the deadline was armed for; a replacement that
+      // arrived in the meantime must not be killed here.
+      if (!ws || this.ws !== ws) return
       log.warn(`no pong or message for ${this.liveness.timeoutMs} ms, reconnecting`)
-      this.ws?.terminate()
+      ws.terminate()
     }, this.liveness.timeoutMs)
   }
 
@@ -238,6 +257,12 @@ export class SubscriptionsClient extends EventEmitter {
     this.ws = null
     this.acked = false
     if (ws) {
+      // Drop every listener first: after this the socket is detached from the
+      // client and its later `close`/`error` can touch nothing. Keep a bare
+      // error sink so a late error on a still-CONNECTING socket (e.g. "closed
+      // before the connection was established") is not an uncaught exception.
+      ws.removeAllListeners()
+      ws.on('error', () => {})
       try {
         if (ws.readyState === WebSocket.OPEN)
           ws.send(JSON.stringify({ type: 'connection_terminate' }))
@@ -245,14 +270,28 @@ export class SubscriptionsClient extends EventEmitter {
       } catch {
         /* ignore */
       }
+      // A half-open socket may never fire `close`; force it down so the FD is freed.
+      const t = setTimeout(() => {
+        try {
+          ws.terminate()
+        } catch {
+          /* ignore */
+        }
+      }, 2000)
+      if (typeof t.unref === 'function') t.unref()
     }
   }
 
   /** Force a reconnect now (e.g. settings changed). */
   reconnectNow(): void {
     const wasUser = this.closedByUser
+    const wasAcked = this.acked
     this.close()
     this.closedByUser = wasUser
+    // `close()` stripped the old socket's listeners, so it will never emit
+    // `disconnected` itself — do it here so subscribers tear down their state
+    // exactly as they would on an unplanned drop.
+    if (wasAcked) this.emit('disconnected', 'reconnecting')
     if (!wasUser) {
       this.backoffMs = 1000
       this.open()

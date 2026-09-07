@@ -12,12 +12,16 @@ interface EventsStore {
   clear: () => Promise<void>
 }
 
+let started = false
+
 export const useEvents = create<EventsStore>((set, get) => ({
   events: [],
   mqttMessages: [],
   paused: false,
   capacity: 2000,
   init: async () => {
+    if (started) return
+    started = true
     const [events, mqttMessages] = await Promise.all([
       invoke('events.getRecent', 500),
       invoke('mqtt.getRecentMessages', 200)

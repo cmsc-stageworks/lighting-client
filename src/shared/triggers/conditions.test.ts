@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { evalCondition, evalConditions, looseEquals } from './conditions'
+import { countLeafConditions, evalCondition, evalConditions, looseEquals } from './conditions'
 
 describe('looseEquals', () => {
   it('compares numbers and numeric strings', () => {
@@ -76,5 +76,49 @@ describe('evalCondition', () => {
         data
       )
     ).toBe(false)
+  })
+  it('"any of" group passes when any leaf passes', () => {
+    const group = {
+      any: [
+        { path: 'alertLevel', op: 'eq' as const, value: '2' },
+        { path: 'alertLevel', op: 'eq' as const, value: '1' }
+      ]
+    }
+    expect(evalConditions([group], data)).toBe(true)
+  })
+  it('"any of" group fails when no leaf passes', () => {
+    const group = {
+      any: [
+        { path: 'alertLevel', op: 'eq' as const, value: '2' },
+        { path: 'alertLevel', op: 'eq' as const, value: '3' }
+      ]
+    }
+    expect(evalConditions([group], data)).toBe(false)
+  })
+  it('mixes an AND leaf with an "any of" group — (x) and (y or z)', () => {
+    const nodes = [
+      { path: 'flag', op: 'eq' as const, value: true },
+      {
+        any: [
+          { path: 'alertLevel', op: 'eq' as const, value: '9' },
+          { path: 'alertLevel', op: 'eq' as const, value: '1' }
+        ]
+      }
+    ]
+    expect(evalConditions(nodes, data)).toBe(true)
+    expect(evalConditions([{ path: 'flag', op: 'eq', value: false }, nodes[1]], data)).toBe(false)
+  })
+  it('countLeafConditions counts group contents', () => {
+    expect(
+      countLeafConditions([
+        { path: 'a', op: 'eq', value: 1 },
+        {
+          any: [
+            { path: 'b', op: 'eq', value: 2 },
+            { path: 'c', op: 'eq', value: 3 }
+          ]
+        }
+      ])
+    ).toBe(3)
   })
 })

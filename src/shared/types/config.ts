@@ -5,6 +5,8 @@ export type {
   AppSettings,
   ChannelEntry,
   Condition,
+  ConditionGroup,
+  ConditionNode,
   ConditionOp,
   EnttecOutput,
   Layer,

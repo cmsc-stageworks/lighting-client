@@ -180,6 +180,28 @@ export function EventInspector({
                           : 'no mappings'}
                       </span>
                     </div>
+                    {e.trace && e.trace.length > 0 && (
+                      <div className="mb-2 rounded-lg border border-border bg-surface-2/50 p-2.5 text-[12px]">
+                        <div className="text-muted mb-1">Why this fired</div>
+                        <ul className="flex flex-col gap-1">
+                          {e.trace.map((t, i) => (
+                            <li key={i}>
+                              <span className="font-semibold">{t.mappingName}</span>
+                              {t.debounced ? (
+                                <span className="text-warning">
+                                  {' '}
+                                  — matched but skipped (debounce)
+                                </span>
+                              ) : t.actions.length ? (
+                                <span className="text-muted"> → {t.actions.join(' · ')}</span>
+                              ) : (
+                                <span className="text-faint"> → no actions</span>
+                              )}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
                     <pre className="mono text-[11px] bg-surface-2 rounded-lg p-2.5 overflow-x-auto max-h-64 select-text">
                       {JSON.stringify(e.data, null, 2)}
                     </pre>
