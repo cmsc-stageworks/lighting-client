@@ -1,4 +1,4 @@
-import type { ConnState, OutputHealth } from '@shared/types/state'
+import type { ConnState, OutputHealth, UpdateState } from '@shared/types/state'
 
 export { formatAgo } from '@shared/utils'
 
@@ -56,6 +56,37 @@ export function outputLabel(state: OutputHealth['state']): string {
       return 'Error'
     default:
       return 'Off'
+  }
+}
+
+export function updateLabel(state: UpdateState, version?: string | null): string {
+  switch (state) {
+    case 'checking':
+      return 'Checking…'
+    case 'available':
+      return `Update available${version ? ` (${version})` : ''}`
+    case 'downloading':
+      return 'Downloading update…'
+    case 'ready':
+      return `Ready to install${version ? ` (${version})` : ''}`
+    case 'error':
+      return 'Update check failed'
+    default:
+      return 'Up to date'
+  }
+}
+
+export function updateTone(state: UpdateState): Tone {
+  switch (state) {
+    case 'available':
+    case 'downloading':
+      return 'warning'
+    case 'ready':
+      return 'accent'
+    case 'error':
+      return 'danger'
+    default:
+      return 'muted'
   }
 }
 

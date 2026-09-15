@@ -49,4 +49,7 @@ linux:
 appImage:
   artifactName: ${name}-${version}.${ext}
 npmRebuild: false
-publish: null
+publish:
+  provider: github
+  owner: cmsc-stageworks
+  repo: lighting-client

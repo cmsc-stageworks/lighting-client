@@ -34,12 +34,17 @@ export function statusColor(snap: RuntimeSnapshot): string {
 
 export function statusLines(snap: RuntimeSnapshot): string[] {
   const outputs = Object.values(snap.outputs)
-  return [
+  const lines = [
     `Thorium: ${snap.thorium.state}`,
     `MQTT: ${snap.mqtt.state}`,
     `Outputs: ${outputs.filter((o) => o.state === 'ok').length}/${outputs.length} ok`,
     `Lighting: ${LIGHTING_MODE_INFO[snap.lightingMode.mode].label}`
   ]
+  if (snap.update.state === 'ready')
+    lines.push(`Update ready to install: ${snap.update.availableVersion}`)
+  else if (snap.update.state === 'available')
+    lines.push(`Update available: ${snap.update.availableVersion}`)
+  return lines
 }
 
 export function createTray(services: Services, getWindow: () => BrowserWindow | null): Tray {
@@ -93,32 +98,45 @@ export function createTray(services: Services, getWindow: () => BrowserWindow | 
     lastMenuKey = menuKey
 
     tray.setToolTip(`CMSC Lighting Client\n${status.join('\n')}`)
-    tray.setContextMenu(
-      Menu.buildFromTemplate([
-        { label: 'Show', click: show },
-        { type: 'separator' },
-        ...status.map((s) => ({ label: s, enabled: false })),
+    const template: Electron.MenuItemConstructorOptions[] = [
+      { label: 'Show', click: show },
+      { type: 'separator' },
+      ...status.map((s) => ({ label: s, enabled: false })),
+      { type: 'separator' },
+      {
+        label: latest.compositor.blackout ? 'Release blackout' : 'Blackout',
+        // Read the current state at click time, not the state this menu was built with.
+        click: () => services.setBlackout(!latest.compositor.blackout)
+      },
+      { label: 'Release all scenes', click: () => services.releaseAll() }
+    ]
+    if (latest.update.state === 'available' || latest.update.state === 'ready') {
+      template.push(
         { type: 'separator' },
         {
-          label: latest.compositor.blackout ? 'Release blackout' : 'Blackout',
-          // Read the current state at click time, not the state this menu was built with.
-          click: () => services.setBlackout(!latest.compositor.blackout)
-        },
-        { label: 'Release all scenes', click: () => services.releaseAll() },
-        { type: 'separator' },
-        {
-          label: 'Lighting mode',
-          submenu: LIGHTING_MODES.map((m) => ({
-            label: LIGHTING_MODE_INFO[m].label,
-            type: 'radio' as const,
-            checked: latest.lightingMode.mode === m,
-            click: () => void setMode(m)
-          }))
-        },
-        { type: 'separator' },
-        { label: 'Quit', click: () => app.quit() }
-      ])
+          label:
+            latest.update.state === 'ready'
+              ? `Restart & install update (${latest.update.availableVersion})`
+              : `Update available (${latest.update.availableVersion}) — open Settings`,
+          click: show
+        }
+      )
+    }
+    template.push(
+      { type: 'separator' },
+      {
+        label: 'Lighting mode',
+        submenu: LIGHTING_MODES.map((m) => ({
+          label: LIGHTING_MODE_INFO[m].label,
+          type: 'radio' as const,
+          checked: latest.lightingMode.mode === m,
+          click: () => void setMode(m)
+        }))
+      },
+      { type: 'separator' },
+      { label: 'Quit', click: () => app.quit() }
     )
+    tray.setContextMenu(Menu.buildFromTemplate(template))
   }
 
   rebuild(latest)

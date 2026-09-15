@@ -25,7 +25,11 @@ type Handler<C extends IpcChannel> = (
  */
 let importPreview: { token: string; kind: 'all' | 'partial'; text: string } | null = null
 
-export function registerIpc(services: Services, getWindow: () => BrowserWindow | null): void {
+export function registerIpc(
+  services: Services,
+  getWindow: () => BrowserWindow | null,
+  requestQuitAndInstall: () => void
+): void {
   const handle = <C extends IpcChannel>(
     channel: C,
     schema: z.ZodTypeAny | null,
@@ -274,6 +278,14 @@ export function registerIpc(services: Services, getWindow: () => BrowserWindow |
   })
   handle('app.quit', null, () => app.quit())
   handle('app.minimizeToTray', null, () => getWindow()?.hide())
+
+  // ---------------------------------------------------------------- update
+  handle('update.check', null, () => s.updater.check(true))
+  handle('update.download', null, () => void s.updater.download())
+  handle('update.install', null, () => requestQuitAndInstall())
+  handle('update.openReleasePage', null, () => {
+    void shell.openExternal('https://github.com/cmsc-stageworks/lighting-client/releases/latest')
+  })
 }
 
 export function hashPin(pin: string, salt: string): string {

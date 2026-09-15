@@ -22,6 +22,9 @@ Node 22 is required (`.nvmrc`). If the shell defaults to another Node, prefix co
 | Run the built app against a scratch profile | `npx electron out/main/index.js --user-data-dir=/tmp/somedir` (add `--remote-debugging-port=9333` to drive the renderer over CDP) |
 | Installers | `yarn build:win` / `yarn build:mac` |
 | Regenerate Thorium event-name list | `yarn gen:thorium-events` (reads `../thorium/src/schema.graphql`) |
+| Regenerate the app icon | `yarn gen:icons` (renders `build/icon.svg` → `build/icon.png`, `resources/icon.png`) |
+
+`package.json` `version` is owned by `semantic-release` (`.releaserc.json`, `.github/workflows/release.yml`) — **never bump it by hand**; a push to `main` with a conventional commit (`fix:`/`feat:`/`BREAKING CHANGE:`) versions, tags and releases itself, and a second CI job attaches the Windows installer. See README.md "Auto-update".
 
 Tests use Vitest in a Node environment. Main-process modules that import `../logging` (electron-log) must be mocked in tests with `vi.mock('../logging', ...)`; see `protocol.test.ts` for the pattern. The Thorium adapter test spins up a fake `subscriptions-transport-ws` server and stubs `fetch`.
 
@@ -57,6 +60,7 @@ ThoriumAdapter / MqttAdapter / UI ──► EventBus ──► RulesEngine (matc
 - **Lighting modes** (`shared/lightingMode.ts`): Normal / Reduced Effects / Locked protect light-sensitive guests by gating *which automatic actions fire* — never by changing DMX values. `gateAction()` is the single rule table, used by `RulesEngine.onEvent` (held-back actions land in `EventTrace.heldBack`), `Services.onMqttCommand` and renderer hints. Direct staff commands bypass it; events they cause carry `staffOrigin`, which Locked lets through but Reduced still filters to scenes with `reducedEffectsCleared`. The mode is persisted in `userData/lighting-mode.json` (`main/config/modeState.ts`), not config.json, and resets to Normal on a new calendar day.
 - **Config** (`main/config/store.ts`): one `config.json` in userData, atomic writes, backups only when profile content changes, zod validation with human-readable errors returned (never thrown) to the renderer. Bump `CONFIG_SCHEMA_VERSION` and add a step in `shared/schema/migrations.ts` for any breaking config change. Secrets go through `SecretVault` (Electron `safeStorage`), never into config.json.
 - **Renderer editing model**: `store/config.ts` keeps a `draft` of the active profile; pages mutate the draft via `update()` and the AppShell banner saves it. Zustand selectors must return stable references (no `.map`/`?? []` inside a selector) or React throws update-depth errors.
+- **Auto-update** (`main/app/updater.ts`): wraps `electron-updater` against the GitHub Releases feed published by `.github/workflows/release.yml`. `autoDownload`/`autoInstallOnAppQuit` are both `false` — this app drives live DMX and must never download or restart itself unattended; every step (`update.check`/`update.download`/`update.install` IPC channels) is an explicit staff click from Settings. `RuntimeSnapshot.update` carries status to the renderer and tray. Installing routes through `requestQuitAndInstall()` in `main/index.ts`, which runs the same graceful shutdown as a normal quit (zero DMX frame, stop outputs) *before* calling `electron-updater`'s `quitAndInstall()` — that ordering matters because `quitAndInstall()` spawns the installer synchronously, before it fires its own `app.quit()`.
 
 ### Deployment assumptions baked into defaults
 

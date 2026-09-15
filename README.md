@@ -66,11 +66,18 @@ nvm use
 yarn
 ```
 
-### 2. Set the version
+### 2. The version is set for you
 
 `package.json` `version` becomes the installer filename, the Add/Remove Programs entry and the
-upgrade key NSIS uses to replace an existing install. Bump it for every build you hand out;
-shipping two different builds as `1.0.0` makes them indistinguishable on the target machine.
+upgrade key NSIS uses to replace an existing install. **Never edit it by hand.** A push to `main`
+runs [semantic-release](https://semantic-release.gitbook.io/), which reads your commit messages,
+decides the next version, bumps `package.json`, writes `CHANGELOG.md`, and tags and publishes a
+GitHub Release — see [Auto-update](#auto-update) below. Manual builds you run yourself (this
+section) still use whatever version is currently checked in.
+
+Commit messages need the conventional prefix or nothing ships: `fix: …` → patch, `feat: …` → minor,
+a `BREAKING CHANGE:` footer → major. `chore:`, `docs:`, `refactor:` and friends cut no release —
+that's the escape hatch for commits you don't want to ship.
 
 ### 3. Gates
 
@@ -133,9 +140,46 @@ as a no-op there. Build on Windows (or in a Windows CI runner) for a signed inst
 
 ### Auto-update
 
-Disabled: `publish: null`, and nothing in `src/` calls `autoUpdater`. `dev-app-update.yml` points
-at a placeholder URL and is excluded from the package. Distribute new installers by hand, or wire
-up a `generic` publish provider and add `electron-updater` to the main process before relying on it.
+The space center never has to fetch an installer from Drive by hand. The pipeline:
+
+```
+push to main ──► .github/workflows/release.yml
+                    │
+                    ├─ release job: gates (prettier/lint/typecheck/test), then
+                    │  semantic-release — versions from commit messages, tags
+                    │  vX.Y.Z, publishes GitHub Release notes
+                    │
+                    └─ build-windows job (only if a version was cut): checks out
+                       that tag, `electron-builder --win`, uploads setup.exe /
+                       .blockmap / latest.yml to the release
+```
+
+`electron-builder.yml`'s `publish: { provider: github, owner: cmsc-stageworks, repo: lighting-client }`
+is what makes `electron-builder` write `latest.yml` (the manifest `electron-updater` polls) and is
+also what `dev-app-update.yml` points at for a forced check from an unpackaged build. The repo must
+stay **public** — `electron-updater` reads GitHub Releases anonymously; a private repo would need a
+token baked into every shipped installer.
+
+In the running app (`src/main/app/updater.ts`): never auto-downloads, never auto-installs on quit
+(`autoDownload`/`autoInstallOnAppQuit` both `false`) — this app drives live DMX output and must not
+restart itself unattended. It checks 30 s after launch and every 6 h (Settings → Updates →
+_Automatically check for updates_ to turn that off), shows a pill in the status bar and tray menu
+once something newer exists, and only downloads or installs when a staff member clicks. **Restart &
+install** runs the same graceful shutdown as a normal quit — zero DMX frame, stop outputs, stop
+Thorium/MQTT — before the installer runs, then relaunches into the new version.
+
+Rolling back a bad release: delete the GitHub Release and its tag; the app then reports the previous
+version as current again on its next check. There's no code signing certificate yet, so installs
+still hit SmartScreen ([Verify on a Windows machine](#5-verify-on-a-windows-machine)) the first time.
+
+### App icon
+
+`build/icon.svg` is the source of truth — edit it, then `yarn gen:icons` renders `build/icon.png`
+(1024px, electron-builder generates `.ico`/`.icns` from it at build time) and `resources/icon.png`
+(the Linux window icon and Electron's own app icon). Don't add `build/icon.ico` or `build/icon.icns`
+back — electron-builder prefers either over the PNG, so their presence silently reintroduces the old
+scaffold logo. The tray icon is a small colored dot generated at runtime (`src/main/app/tray.ts`)
+and needs no asset.
 
 ## First run
 

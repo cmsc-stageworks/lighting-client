@@ -11,7 +11,8 @@ import type {
   SimulateReport,
   ThoriumProbeResult,
   TestReport,
-  ThoriumTestReport
+  ThoriumTestReport,
+  UpdateStatus
 } from './state'
 
 /**
@@ -97,6 +98,11 @@ export interface IpcApi {
   'app.setLaunchAtLogin': (on: boolean) => void
   'app.quit': () => void
   'app.minimizeToTray': () => void
+
+  'update.check': () => UpdateStatus
+  'update.download': () => void
+  'update.install': () => void
+  'update.openReleasePage': () => void
 }
 
 export type IpcChannel = keyof IpcApi

@@ -52,7 +52,7 @@ if (!gotLock) {
       services.store.settings().startMinimized
     )
 
-    registerIpc(services, () => mainWindow)
+    registerIpc(services, () => mainWindow, requestQuitAndInstall)
     bindPushes(services, () => mainWindow)
 
     const createWindow = (): void => {
@@ -87,10 +87,38 @@ if (!gotLock) {
     quitting = true
     if (services) {
       e.preventDefault()
-      void services.shutdown().finally(() => {
-        services = null
-        app.quit()
-      })
+      const s = services
+      services = null
+      void s.shutdown().finally(() => app.quit())
     }
   })
+}
+
+/**
+ * The updater's "Restart & install" action (src/main/app/updater.ts). Runs the
+ * same graceful shutdown as a normal quit — zero DMX frame, stop outputs, stop
+ * Thorium/MQTT — before spawning the installer, so the show goes dark cleanly
+ * instead of freezing on its last frame. `updater.quitAndInstall()` calls
+ * electron-updater's own `app.quit()` internally once the installer is spawned;
+ * by then `quitting` is already true, so the `before-quit` listener above lets
+ * that quit proceed instead of trying to shut services down a second time.
+ */
+function requestQuitAndInstall(): void {
+  if (quitting) return
+  quitting = true
+  const s = services
+  const updater = s?.updater
+  services = null
+  const spawnInstaller = (): void => {
+    if (updater?.canInstall()) updater.quitAndInstall()
+    else app.quit()
+  }
+  if (s) {
+    void s
+      .shutdown()
+      .catch((err) => getLogger('main').error('shutdown before install failed', err))
+      .finally(spawnInstaller)
+  } else {
+    spawnInstaller()
+  }
 }

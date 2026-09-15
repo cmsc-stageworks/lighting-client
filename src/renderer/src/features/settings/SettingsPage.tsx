@@ -1,10 +1,22 @@
 import React, { useEffect, useState } from 'react'
-import { ClipboardCopy, Download, FolderOpen, History, Plus, Upload } from 'lucide-react'
+import {
+  ClipboardCopy,
+  Download,
+  DownloadCloud,
+  ExternalLink,
+  FolderOpen,
+  History,
+  Plus,
+  RefreshCw,
+  RotateCw,
+  Upload
+} from 'lucide-react'
 import type { ImportPreview } from '@shared/types/state'
 import { useConfig } from '../../store/config'
+import { useRuntime } from '../../store/runtime'
 import { invoke } from '../../lib/api'
 import { toast } from '../../store/toasts'
-import { formatAgo } from '../../lib/format'
+import { formatAgo, updateLabel } from '../../lib/format'
 import {
   Button,
   Callout,
@@ -25,6 +37,8 @@ export function SettingsPage(): React.JSX.Element {
   const config = useConfig((s) => s.config)
   const patchSettings = useConfig((s) => s.patchSettings)
   const dirty = useConfig((s) => s.dirty)
+  const update = useRuntime((s) => s.snapshot?.update)
+  const activeScenes = useRuntime((s) => s.snapshot?.compositor.active.length ?? 0)
   const [versions, setVersions] = useState<Record<string, string> | null>(null)
   const [backups, setBackups] = useState<{ path: string; ts: number; size: number }[]>([])
   const [preview, setPreview] = useState<ImportPreview | null>(null)
@@ -252,6 +266,93 @@ export function SettingsPage(): React.JSX.Element {
                   { k: 'Platform', v: versions.platform }
                 ]}
               />
+            )}
+          </div>
+        </Card>
+
+        <Card>
+          <SectionTitle>Updates</SectionTitle>
+          <div className="flex flex-col gap-3">
+            {update?.state === 'disabled' ? (
+              <div className="text-[13px] text-muted">
+                Auto-update is only active in an installed build.
+              </div>
+            ) : (
+              <>
+                <div className="flex items-center gap-2">
+                  <span className="font-medium">{updateLabel(update?.state ?? 'idle')}</span>
+                  {update?.state === 'downloading' && (
+                    <span className="text-[12px] text-muted mono">{update.percent}%</span>
+                  )}
+                </div>
+                {update?.state === 'downloading' && (
+                  <div className="h-1.5 rounded-full bg-surface-3 overflow-hidden">
+                    <div
+                      className="h-full bg-accent transition-[width]"
+                      style={{ width: `${update.percent}%` }}
+                    />
+                  </div>
+                )}
+                {update?.state === 'error' && update.error && (
+                  <Callout tone="danger">{update.error}</Callout>
+                )}
+                {update?.releaseNotes &&
+                  (update.state === 'available' || update.state === 'ready') && (
+                    <div className="text-[12px] text-muted whitespace-pre-wrap max-h-32 overflow-y-auto card p-2">
+                      {update.releaseNotes}
+                    </div>
+                  )}
+                <div className="flex items-center gap-2 flex-wrap">
+                  <Button
+                    icon={<RefreshCw size={14} />}
+                    disabled={
+                      update?.state === 'checking' ||
+                      update?.state === 'downloading' ||
+                      update?.state === 'ready'
+                    }
+                    onClick={() => void invoke('update.check')}
+                  >
+                    {update?.state === 'checking' ? 'Checking…' : 'Check for updates'}
+                  </Button>
+                  {update?.state === 'available' && (
+                    <Button
+                      variant="primary"
+                      icon={<DownloadCloud size={14} />}
+                      onClick={() => void invoke('update.download')}
+                    >
+                      Download update
+                    </Button>
+                  )}
+                  {update?.state === 'ready' && (
+                    <InlineConfirm
+                      label={
+                        <span className="inline-flex items-center gap-1.5">
+                          <RotateCw size={14} /> Restart & install
+                        </span>
+                      }
+                      question={
+                        activeScenes > 0
+                          ? `${activeScenes} scene${activeScenes === 1 ? ' is' : 's are'} live — release outputs and install now?`
+                          : 'Restart and install now?'
+                      }
+                      variant="primary"
+                      onConfirm={() => void invoke('update.install')}
+                    />
+                  )}
+                  <Button
+                    variant="ghost"
+                    icon={<ExternalLink size={14} />}
+                    onClick={() => void invoke('update.openReleasePage')}
+                  >
+                    Release notes
+                  </Button>
+                </div>
+                <Switch
+                  checked={s.autoCheckUpdates}
+                  onChange={(v) => void patchSettings({ autoCheckUpdates: v })}
+                  label="Automatically check for updates"
+                />
+              </>
             )}
           </div>
         </Card>

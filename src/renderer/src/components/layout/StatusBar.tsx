@@ -1,7 +1,7 @@
 import React, { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import * as Popover from '@radix-ui/react-popover'
-import { Cable, Radio, Rocket, Sun } from 'lucide-react'
+import { Cable, DownloadCloud, Radio, Rocket, Sun } from 'lucide-react'
 import { useRuntime } from '../../store/runtime'
 import { useConfig } from '../../store/config'
 import {
@@ -10,6 +10,8 @@ import {
   formatAgo,
   outputLabel,
   outputTone,
+  updateLabel,
+  updateTone,
   type Tone
 } from '../../lib/format'
 import { Button, KeyValue, Pill } from '../ui'
@@ -203,6 +205,31 @@ export function StatusBar(): React.JSX.Element {
           />
         )
       })}
+      {(snap.update.state === 'available' ||
+        snap.update.state === 'downloading' ||
+        snap.update.state === 'ready') && (
+        <>
+          <span className="w-px h-6 bg-border mx-1" />
+          <StatusPopover
+            tone={updateTone(snap.update.state)}
+            label={updateLabel(snap.update.state, snap.update.availableVersion)}
+            icon={<DownloadCloud size={13} />}
+            title="Update"
+            fixTo="/setup/settings"
+            items={[
+              { k: 'Current version', v: snap.update.currentVersion },
+              { k: 'Available', v: snap.update.availableVersion ?? '—' },
+              {
+                k: 'Status',
+                v:
+                  snap.update.state === 'downloading'
+                    ? `Downloading — ${snap.update.percent}%`
+                    : updateLabel(snap.update.state)
+              }
+            ]}
+          />
+        </>
+      )}
       <div className="ml-auto flex items-center gap-2 text-[12px] text-muted shrink-0">
         <Sun size={13} />
         <span className="mono">{Math.round(snap.compositor.grandMaster * 100)}%</span>

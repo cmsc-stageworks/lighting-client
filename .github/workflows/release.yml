@@ -1,0 +1,99 @@
+name: Release
+
+# Cuts a version from conventional-commit messages on every push to main, then
+# builds the Windows installer for that version and attaches it to the GitHub
+# Release. The app itself (src/main/app/updater.ts) polls that release feed via
+# electron-updater. See README.md "Auto-update" for the end-to-end picture.
+
+on:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Version & publish release notes
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    outputs:
+      published: ${{ steps.release.outputs.published }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          # semantic-release pushes the release commit/tag with this token; using a
+          # PAT here (if ever needed) instead of GITHUB_TOKEN would also make that
+          # push re-trigger this workflow, which we don't want.
+          persist-credentials: true
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: yarn
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Prettier check
+        run: npx prettier --check "src/**/*.{ts,tsx}"
+
+      - name: Lint
+        run: yarn lint
+
+      - name: Typecheck
+        run: yarn typecheck
+
+      - name: Test
+        run: yarn test
+
+      - name: Release
+        id: release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: yarn release
+
+  build-windows:
+    name: Build Windows installer
+    needs: release
+    if: needs.release.outputs.published == 'true'
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.release.outputs.version }}
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: yarn
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Build
+        run: yarn build
+
+      - name: Package (Windows NSIS)
+        run: npx electron-builder --win --publish never
+
+      - name: Upload installer to the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "v${{ needs.release.outputs.version }}" \
+            dist/*.exe dist/*.blockmap dist/latest.yml --clobber

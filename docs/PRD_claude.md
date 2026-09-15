@@ -215,6 +215,7 @@ Requirement IDs are stable and referenced from the ERD. Priority: **P0** must sh
 | F-OPS-04 | P0 | On quit or crash of the renderer, DMX output continues from the main process; on app exit, outputs send a final zero frame (configurable) and close cleanly. |
 | F-OPS-05 | P0 | Rolling log files on disk (info level, 7 days) with a "Open logs folder" button and a "Copy diagnostics" button that assembles versions, config summary (secrets redacted), output health and the last 200 events. |
 | F-OPS-06 | P1 | A `--headless` flag runs without a window for a future service-style install. |
+| F-OPS-07 | P1 | **Auto-update**: the app checks a public GitHub Releases feed on a schedule and shows staff when a newer build exists; downloading and installing are explicit staff actions, never automatic — this app is driving live DMX output during a show and must not restart itself unattended. Each push to `main` versions and publishes itself; distributing a new build to every control room no longer requires a shared drive. |
 
 ### 6.8 User interface (F-UX)
 

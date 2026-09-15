@@ -323,6 +323,7 @@ export function seedConfig(hostname: string): AppConfig {
       setupPinHash: null,
       eventLogSize: 2000,
       logLevel: 'info',
+      autoCheckUpdates: true,
       window: null,
       wizardCompleted: false
     },

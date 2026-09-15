@@ -49,6 +49,17 @@ function snap(over: Partial<RuntimeSnapshot> = {}): RuntimeSnapshot {
     unresolvedMappings: {},
     alertOverrides: {},
     lightingMode: { mode: 'normal', since: 0, staleDay: false, heldBack: { count: 0, last: null } },
+    update: {
+      state: 'idle',
+      currentVersion: '1.0.0',
+      availableVersion: null,
+      releaseNotes: null,
+      releaseDate: null,
+      percent: 0,
+      bytesPerSecond: 0,
+      lastCheckedAt: null,
+      error: null
+    },
     ...over
   } as RuntimeSnapshot
 }
@@ -107,5 +118,35 @@ describe('tray', () => {
     expect(statusLines(snap({ lightingMode: { ...snap().lightingMode, mode: 'locked' } }))[3]).toBe(
       'Lighting: Locked'
     )
+  })
+
+  it('statusLines appends an update line only when one is available or ready', () => {
+    expect(statusLines(snap())).toHaveLength(4)
+    expect(
+      statusLines(
+        snap({ update: { ...snap().update, state: 'available', availableVersion: '1.1.0' } })
+      )
+    ).toContain('Update available: 1.1.0')
+    expect(
+      statusLines(snap({ update: { ...snap().update, state: 'ready', availableVersion: '1.1.0' } }))
+    ).toContain('Update ready to install: 1.1.0')
+  })
+
+  it('adds a menu entry once an update is available, and rebuilds the menu when it arrives', () => {
+    const emitter = new EventEmitter()
+    const services = Object.assign(emitter, {
+      snapshot: () => snap(),
+      setBlackout: vi.fn(),
+      releaseAll: vi.fn()
+    }) as unknown as import('../services').Services
+
+    createTray(services, () => null)
+    const afterInit = { ...calls }
+
+    emitter.emit(
+      'snapshot',
+      snap({ update: { ...snap().update, state: 'available', availableVersion: '1.1.0' } })
+    )
+    expect(calls.setContextMenu).toBe(afterInit.setContextMenu + 1)
   })
 })

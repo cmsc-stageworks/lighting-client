@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="plate" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#182230" />
+      <stop offset="100%" stop-color="#0b0f14" />
+    </linearGradient>
+    <radialGradient id="glow" cx="50%" cy="48%" r="52%">
+      <stop offset="0%" stop-color="#22b8e6" stop-opacity="0.35" />
+      <stop offset="100%" stop-color="#22b8e6" stop-opacity="0" />
+    </radialGradient>
+    <linearGradient id="beam" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#4cc9f0" stop-opacity="0.9" />
+      <stop offset="100%" stop-color="#4cc9f0" stop-opacity="0" />
+    </linearGradient>
+  </defs>
+
+  <!-- backplate -->
+  <rect x="32" y="32" width="960" height="960" rx="208" fill="url(#plate)" />
+
+  <!-- soft glow behind the mark -->
+  <circle cx="512" cy="512" r="340" fill="url(#glow)" />
+
+  <!-- light beam cast by the ship -->
+  <polygon points="512,332 662,692 362,692" fill="url(#beam)" />
+
+  <!-- aperture ring -->
+  <circle cx="512" cy="512" r="300" fill="none" stroke="#22b8e6" stroke-width="44" />
+
+  <!-- ship -->
+  <polygon points="512,296 584,476 440,476" fill="#e6edf3" />
+</svg>

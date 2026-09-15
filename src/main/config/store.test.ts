@@ -51,6 +51,18 @@ describe('ConfigStore', () => {
     expect(store.active().simulators).toEqual([])
   })
 
+  it('defaults autoCheckUpdates to true for a config saved before that field existed', async () => {
+    const dir3 = await mkdtemp(join(tmpdir(), 'cmsc-store-noupdates-'))
+    const raw = structuredClone(seedConfig('old-host')) as Record<string, unknown>
+    const settings = raw.settings as Record<string, unknown>
+    delete settings.autoCheckUpdates
+    await writeFile(join(dir3, 'config.json'), JSON.stringify(raw), 'utf8')
+    const store3 = new ConfigStore(dir3)
+    await store3.load()
+    expect(store3.settings().autoCheckUpdates).toBe(true)
+    await rm(dir3, { recursive: true, force: true })
+  })
+
   it('loads and upgrades an existing v2 config in place, backing up the original', async () => {
     const dir2 = await mkdtemp(join(tmpdir(), 'cmsc-store-v2-'))
     // A believable v2 document: schemaVersion 2, one `trigger` per mapping with the

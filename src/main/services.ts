@@ -23,6 +23,7 @@ import { ActionRunner } from './core/rules/actions'
 import { RulesEngine } from './core/rules/engine'
 import { SimulatorRegistry } from './core/simulators'
 import { getLogger } from './logging'
+import { UpdaterService } from './app/updater'
 import { OutputManager } from './outputs/manager'
 import { MqttAdapter } from './sources/mqtt/adapter'
 import { commandGateRequest, parseMqttCommand } from './sources/mqtt/commands'
@@ -57,6 +58,7 @@ export class Services extends EventEmitter {
   readonly registry = new SimulatorRegistry()
   readonly compositor = new Compositor()
   readonly outputs = new OutputManager()
+  readonly updater: UpdaterService
   readonly log: EventLog
   readonly runner: ActionRunner
   readonly engine: RulesEngine
@@ -88,6 +90,8 @@ export class Services extends EventEmitter {
     super()
     this.store = new ConfigStore(userData)
     this.secrets = new SecretVault(userData)
+    this.updater = new UpdaterService(() => this.store.settings().autoCheckUpdates)
+    this.updater.on('changed', () => this.scheduleSnapshot())
     this.modeStore = new ModeStateStore(userData)
     this.modeState = this.modeStore.create('normal')
     this.log = new EventLog(2000, (batch) => this.emit('events', batch))
@@ -242,12 +246,14 @@ export class Services extends EventEmitter {
       name: 'startup',
       data: { version: app.getVersion() }
     })
+    this.updater.start()
     log.info('services started')
   }
 
   async shutdown(): Promise<void> {
     log.info('shutting down')
     this.stopped = true
+    this.updater.stop()
     if (this.snapshotTimer) clearInterval(this.snapshotTimer)
     this.snapshotTimer = null
     if (this.snapshotDebounce) clearTimeout(this.snapshotDebounce)
@@ -366,7 +372,8 @@ export class Services extends EventEmitter {
         staleDay:
           this.modeState.mode !== 'normal' && this.modeState.day !== localDayKey(Date.now()),
         heldBack: { count: this.heldBack.count, last: this.heldBack.last }
-      }
+      },
+      update: this.updater.getStatus()
     }
   }
 

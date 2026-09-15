@@ -96,6 +96,29 @@ export interface RuntimeSnapshot {
   unresolvedMappings: Record<string, { reason: string; fatal: boolean }>
   alertOverrides: Record<string, string>
   lightingMode: LightingModeRuntime
+  update: UpdateStatus
+}
+
+/**
+ * `disabled` — running unpackaged (`app.isPackaged === false`); auto-update never runs.
+ * `idle` — packaged, no check outstanding, nothing newer known yet.
+ * `checking` / `available` / `downloading` / `ready` — a check-for-updates cycle in progress.
+ * `error` — the last check or download failed; `error` carries the message.
+ */
+export type UpdateState =
+  'disabled' | 'idle' | 'checking' | 'available' | 'downloading' | 'ready' | 'error'
+
+export interface UpdateStatus {
+  state: UpdateState
+  currentVersion: string
+  availableVersion: string | null
+  releaseNotes: string | null
+  releaseDate: string | null
+  /** download progress, 0–100; meaningful only while `state === 'downloading'` */
+  percent: number
+  bytesPerSecond: number
+  lastCheckedAt: number | null
+  error: string | null
 }
 
 export interface LightingModeRuntime {

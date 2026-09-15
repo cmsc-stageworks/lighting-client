@@ -31,6 +31,7 @@ export const AppSettingsSchema = z.object({
   setupPinHash: z.string().nullable().default(null),
   eventLogSize: z.number().int().min(100).max(20000).default(2000),
   logLevel: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
+  autoCheckUpdates: z.boolean().default(true),
   window: z
     .object({
       width: z.number().int(),
