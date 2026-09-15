@@ -22,7 +22,11 @@ const candidates = [schemaPath, join(process.cwd(), '../thorium/src/schema.graph
 const found = candidates.find((p) => existsSync(p))
 
 describe.skipIf(!found)('GraphQL operations match the Thorium schema', () => {
-  const schema = buildSchema(readFileSync(found!, 'utf8'))
+  // `skipIf` only skips the tests below, not this describe body — it still runs
+  // during collection even when `found` is undefined (e.g. in CI, where the
+  // sibling ../thorium checkout never exists). Guard the read so collection
+  // doesn't throw; the `it`s themselves never execute in that case.
+  const schema = found ? buildSchema(readFileSync(found, 'utf8')) : null
   const docs = Object.entries(operations).filter(
     ([, v]) => typeof v === 'string' && /^\s*(query|mutation|subscription)\b/.test(v)
   ) as [string, string][]
@@ -32,7 +36,7 @@ describe.skipIf(!found)('GraphQL operations match the Thorium schema', () => {
   })
 
   it.each(docs)('%s is valid', (_name, doc) => {
-    const errors = validate(schema, parse(doc))
+    const errors = validate(schema!, parse(doc))
     expect(errors.map((e) => e.message)).toEqual([])
   })
 })
