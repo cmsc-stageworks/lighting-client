@@ -3,6 +3,7 @@ import { Outlet, useLocation } from 'react-router-dom'
 import { Lock, Save, Undo2 } from 'lucide-react'
 import { Sidebar } from './Sidebar'
 import { StatusBar } from './StatusBar'
+import { LightingModeBanner, LightingModeDialog } from './LightingMode'
 import { Toasts } from '../ui/Toasts'
 import { Button, Input } from '../ui'
 import { useConfig } from '../../store/config'
@@ -94,6 +95,7 @@ export function AppShell(): React.JSX.Element {
             </Button>
           </div>
         )}
+        <LightingModeBanner />
         {dirty && (
           <div className="bg-warning/15 border-b border-warning/30 text-[13px] px-4 min-h-10 py-1.5 flex items-center gap-3 flex-wrap">
             <span className="font-semibold text-warning">Unsaved changes</span>
@@ -135,6 +137,7 @@ export function AppShell(): React.JSX.Element {
           {inSetup && locked ? <PinGate onUnlock={() => setUnlocked(true)} /> : <Outlet />}
         </main>
       </div>
+      <LightingModeDialog />
       <Toasts />
     </div>
   )

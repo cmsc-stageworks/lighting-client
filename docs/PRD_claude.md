@@ -233,9 +233,24 @@ The UI is a first-class requirement, not a wrapper. It is judged against the pri
 | F-UX-09 | P1 | Keyboard focus order and visible focus rings throughout; all controls reachable by Tab. |
 | F-UX-10 | P1 | Window state (size, position, last screen) is remembered. |
 
+### 6.9 Lighting modes for light-sensitive guests (F-MODE)
+
+Staff protect guests with light sensitivity from the client, not from Thorium. A mode never scales, dims or caps DMX values (the lighting controller owns the looks); it only decides which **automatic** actions may fire. "Automatic" is any mapping fired by Thorium, MQTT subscriptions, system events or Simulate-live, plus every MQTT `cmd` command. Direct staff actions in the app (Dashboard, Scenes, tray, alert override) always work.
+
+| ID | Priority | Requirement |
+|----|----------|-------------|
+| F-MODE-01 | P0 | Three modes: **Normal** (everything works), **Reduced Effects** (automatic actions may only turn on scenes marked *Cleared for Reduced Effects*; releases still work; blackout, Grand Master and raw channel commands are held back) and **Locked** (no automatic lighting action runs; mappings fired by a staff action, such as the alert override, still run). `publishMqtt` and Thorium mutations are never held back. |
+| F-MODE-02 | P0 | Each scene has a *Cleared for Reduced Effects* flag, off by default, set in the scene editor or inline in the scenes list. Duplicated scenes start not cleared. |
+| F-MODE-03 | P0 | The mode is always visible and changeable from a segmented control in the status bar on every screen, and from a tray submenu. Every change goes through a plain-language confirmation. Switching to a less protective mode focuses Cancel. |
+| F-MODE-04 | P0 | While not Normal, a colored banner shows the mode, since when, and how many triggers were held back, with a "What was held back?" list and a one-click way back to Normal. |
+| F-MODE-05 | P0 | Entering Reduced Effects offers (pre-checked) to turn off active scenes that aren't cleared. Moving to a less restrictive mode offers (pre-checked) to catch the lights up to each in-scope simulator's current alert level. |
+| F-MODE-06 | P0 | The mode survives a restart or crash on the same calendar day. The first launch on a new day starts in Normal. If the app was left running overnight, the banner asks "still needed today?" and never switches on its own. |
+| F-MODE-07 | P1 | Held-back actions are recorded in the event trace with a reason, surfaced in the Event Inspector ("Held back only" filter), the Simulate panel and the Dashboard activity list. Mappings that Reduced Effects would hold back are badged on the Mappings page. |
+| F-MODE-08 | P1 | The mode is published retained on `…/lightingMode`. MQTT cannot change the mode. |
+
 ## 7. Screens
 
-1. **Dashboard** — status header; simulator selector (when more than one is in scope); scene button grid; Blackout, Release All, Grand Master; "Recent activity" ticker showing the last few events and what they did.
+1. **Dashboard** — status header (with the lighting mode control, §6.9); simulator selector (when more than one is in scope); scene button grid; Blackout, Release All, Grand Master; "Recent activity" ticker showing the last few events and what they did.
 2. **Scenes** — list with category filter; editor with channel grid (a 512-cell picker plus a table), addressing mode toggle, fade/hold settings, live preview toggle ("Preview sends to DMX on the Test layer while this editor is open").
 3. **Mappings** — table (enabled, name, trigger summary, actions summary, last fired, count); editor with trigger preset picker, custom event builder, action list, simulator restriction, debounce; "Simulate" panel.
 4. **Sources › Thorium** — connection form, test panel, simulator scope, live event inspector with filters and "Create trigger from this".
@@ -269,6 +284,7 @@ The UI is a first-class requirement, not a wrapper. It is judged against the pri
 6. Unplugging the Enttec shows `error: port not found` within 5 s; replugging restores `ok` without a restart.
 7. Kill the app; relaunch at login; it reconnects and reproduces the current alert level's lighting with no clicks.
 8. Export config on the central machine, import on a ship machine with a "Single ship" profile, and the same relative scenes work with that ship's base address.
+9. With only "Alert 5" cleared, switch to Reduced Effects: a Thorium change to Alert 1 does not change the lights and appears as held back; Alert 5 still applies. Switch to Locked: no Thorium change affects the lights, but the Dashboard alert override does. Restart the same day: the mode is kept. DMX values for a scene are identical in every mode.
 
 ## 10. Risks and mitigations
 
@@ -384,8 +400,9 @@ Base topic `cmsc/lighting/<instanceName>` (configurable).
 | `…/thorium` | publish, retained | `{"connected":true,"flight":"…","simulators":["Magellan"]}` | On change |
 | `…/thorium/alertLevel/<simulatorName>` | publish, retained | `{"level":"3","training":false}` | On change |
 | `…/scenes/active` | publish, retained | `[{"scene":"Red Alert","simulator":"Magellan","layer":"Alert"}]` | On change |
+| `…/lightingMode` | publish, retained | `{"mode":"reduced","since":"2026-09-12T14:03:00.000Z"}` | On change (F-MODE-08) |
 | `…/events` | publish | normalized event JSON | Optional, off by default |
-| `…/cmd` | subscribe | `{"action":"activateScene","scene":"Party","simulator":"Magellan"}`, `{"action":"releaseScene",…}`, `{"action":"blackout","on":true}`, `{"action":"setChannel","universe":10,"channel":5,"value":255,"holdMs":500}` | F-MQTT-07 |
+| `…/cmd` | subscribe | `{"action":"activateScene","scene":"Party","simulator":"Magellan"}`, `{"action":"releaseScene",…}`, `{"action":"blackout","on":true}`, `{"action":"setChannel","universe":10,"channel":5,"value":255,"holdMs":500}` | F-MQTT-07. Filtered by the lighting mode like any automatic source (F-MODE-01) |
 | user-defined | subscribe | any | Matched by mappings |
 
 ## Appendix C — Seeded defaults on first run

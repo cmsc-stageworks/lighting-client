@@ -78,6 +78,16 @@ export const migrations: Migration[] = [
       }
       return { ...raw, schemaVersion: 4 }
     }
+  },
+  {
+    // v5: scene.reducedEffectsCleared (defaults to false). A no-op here, but the
+    // bump makes an older build refuse the file instead of silently dropping
+    // the flags on its next save.
+    from: 4,
+    to: 5,
+    up(raw) {
+      return { ...raw, schemaVersion: 5 }
+    }
   }
 ]
 

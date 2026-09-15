@@ -1,3 +1,5 @@
+import type { LightingMode } from '../lightingMode'
+
 export type ConnState = 'disabled' | 'connecting' | 'connected' | 'reconnecting' | 'error'
 
 export interface OutputHealth {
@@ -93,6 +95,17 @@ export interface RuntimeSnapshot {
    */
   unresolvedMappings: Record<string, { reason: string; fatal: boolean }>
   alertOverrides: Record<string, string>
+  lightingMode: LightingModeRuntime
+}
+
+export interface LightingModeRuntime {
+  mode: LightingMode
+  /** when the current mode was set */
+  since: number
+  /** a restrictive mode set on an earlier calendar day is still on (app left running) */
+  staleDay: boolean
+  /** automatic actions held back since the mode was set */
+  heldBack: { count: number; last: { ts: number; text: string } | null }
 }
 
 export interface SerialDeviceInfo {
@@ -174,7 +187,12 @@ export interface ReferenceData {
 
 export interface SimulateReport {
   event: { type: string; name: string; simulatorName: string | null; data: Record<string, unknown> }
-  matched: { mappingId: string; mappingName: string; actions: string[] }[]
+  matched: {
+    mappingId: string
+    mappingName: string
+    actions: string[]
+    heldBack?: { action: string; reason: string }[]
+  }[]
   frames: { universe: number; changed: { channel: number; value: number }[] }[]
   live: boolean
 }

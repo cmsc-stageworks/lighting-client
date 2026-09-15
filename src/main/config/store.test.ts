@@ -3,6 +3,7 @@ import { mkdtemp, readFile, readdir, rm, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { seedConfig } from '@shared/seed'
+import { CONFIG_SCHEMA_VERSION } from '@shared/constants'
 
 vi.mock('../logging', () => ({
   getLogger: () => ({
@@ -44,7 +45,7 @@ describe('ConfigStore', () => {
 
   it('seeds and persists a config on first load', async () => {
     const raw = JSON.parse(await readFile(join(dir, 'config.json'), 'utf8'))
-    expect(raw.schemaVersion).toBe(4)
+    expect(raw.schemaVersion).toBe(CONFIG_SCHEMA_VERSION)
     expect(store.active().mappings.length).toBeGreaterThan(0)
     // No site-specific assumptions: simulators are configured in the wizard.
     expect(store.active().simulators).toEqual([])
@@ -67,7 +68,7 @@ describe('ConfigStore', () => {
 
     // File is rewritten at the new version…
     const onDisk = JSON.parse(await readFile(join(dir2, 'config.json'), 'utf8'))
-    expect(onDisk.schemaVersion).toBe(4)
+    expect(onDisk.schemaVersion).toBe(CONFIG_SCHEMA_VERSION)
     // …the single trigger became a one-entry OR list, keeping its conditions…
     const upgraded = s2.active().mappings[0]
     expect(upgraded.triggers).toHaveLength(1)

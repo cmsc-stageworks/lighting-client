@@ -9,6 +9,7 @@ export interface EmitOptions {
   data?: Record<string, unknown>
   simulatorId?: string
   simulatorName?: string
+  staffOrigin?: boolean
 }
 
 /**
@@ -36,7 +37,8 @@ export class EventBus {
       simulatorId: opts.simulatorId,
       simulatorName: opts.simulatorName,
       data: opts.data ?? {},
-      matchedMappingIds: []
+      matchedMappingIds: [],
+      ...(opts.staffOrigin ? { staffOrigin: true } : {})
     }
   }
 

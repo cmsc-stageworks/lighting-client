@@ -1,4 +1,5 @@
-import { app, Menu, nativeImage, Tray, type BrowserWindow } from 'electron'
+import { app, dialog, Menu, nativeImage, Tray, type BrowserWindow } from 'electron'
+import { LIGHTING_MODES, LIGHTING_MODE_INFO, type LightingMode } from '@shared/lightingMode'
 import type { RuntimeSnapshot } from '@shared/types/state'
 import type { Services } from '../services'
 
@@ -36,7 +37,8 @@ export function statusLines(snap: RuntimeSnapshot): string[] {
   return [
     `Thorium: ${snap.thorium.state}`,
     `MQTT: ${snap.mqtt.state}`,
-    `Outputs: ${outputs.filter((o) => o.state === 'ok').length}/${outputs.length} ok`
+    `Outputs: ${outputs.filter((o) => o.state === 'ok').length}/${outputs.length} ok`,
+    `Lighting: ${LIGHTING_MODE_INFO[snap.lightingMode.mode].label}`
   ]
 }
 
@@ -50,6 +52,25 @@ export function createTray(services: Services, getWindow: () => BrowserWindow | 
     if (w.isMinimized()) w.restore()
     w.show()
     w.focus()
+  }
+
+  const setMode = async (mode: LightingMode): Promise<void> => {
+    const current = latest.lightingMode.mode
+    if (mode === current) return
+    if (mode === 'normal') {
+      const { response } = await dialog.showMessageBox({
+        type: 'warning',
+        buttons: ['Cancel', 'Return to Normal'],
+        defaultId: 0,
+        cancelId: 0,
+        title: 'Return to Normal?',
+        message: 'Return to Normal lighting?',
+        detail:
+          'Full lighting effects will resume. Check that guests with light sensitivity are finished or have agreed.'
+      })
+      if (response !== 1) return
+    }
+    await services.setLightingMode(mode, { releaseUncleared: true, catchUpAlerts: true }, 'tray')
   }
 
   // The snapshot fires ~20×/s and most fields are irrelevant to the tray; only
@@ -84,6 +105,16 @@ export function createTray(services: Services, getWindow: () => BrowserWindow | 
           click: () => services.setBlackout(!latest.compositor.blackout)
         },
         { label: 'Release all scenes', click: () => services.releaseAll() },
+        { type: 'separator' },
+        {
+          label: 'Lighting mode',
+          submenu: LIGHTING_MODES.map((m) => ({
+            label: LIGHTING_MODE_INFO[m].label,
+            type: 'radio' as const,
+            checked: latest.lightingMode.mode === m,
+            click: () => void setMode(m)
+          }))
+        },
         { type: 'separator' },
         { label: 'Quit', click: () => app.quit() }
       ])

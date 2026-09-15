@@ -161,9 +161,19 @@ The Simulators page has the same _Read from Thorium_ import, so you can re-run i
 
 Config lives in the Electron user-data folder as `config.json` (atomic writes, 20 rolling backups in `backups/`), secrets in `secrets.json` encrypted via `safeStorage`, logs in `logs/main.log`.
 
+## Guests with light sensitivity
+
+The mode buttons at the top-left of every screen (also in the tray menu) set how much the lights are allowed to do on their own. The mode never dims or changes DMX values; it only decides which scenes may fire.
+
+- **Normal**: everything works. The app starts each day in Normal.
+- **Reduced Effects**: only scenes an admin has ticked _Cleared for Reduced Effects_ (Scenes page) can be turned on by Thorium or MQTT. Turning things off still works; blackout from triggers is held back. Dashboard buttons still work, and ones that aren't cleared ask you to tap twice.
+- **Locked**: nothing automatic changes the lights. To hold a look for the whole mission, pick _Locked_, then set the Alert override on the Dashboard (or press a scene button).
+
+A colored banner stays on screen while you're not in Normal. Click _What was held back?_ to see what the lights ignored. If the app restarts during a mission it comes back in the same mode; on a new day it starts in Normal, and an app left running overnight asks before anything changes.
+
 ## MQTT contract
 
-Base topic `cmsc/lighting/<instanceName>`. Retained status topics: `status`, `outputs/<name>`, `thorium`, `thorium/alertLevel/<simulator>`, `scenes/active`, `blackout`. Command topic `<base>/cmd` accepts JSON such as:
+Base topic `cmsc/lighting/<instanceName>`. Retained status topics: `status`, `outputs/<name>`, `thorium`, `thorium/alertLevel/<simulator>`, `scenes/active`, `blackout`, `lightingMode`. Commands are filtered by the lighting mode like Thorium triggers, and cannot change the mode. Command topic `<base>/cmd` accepts JSON such as:
 
 ```json
 {"action":"activateScene","scene":"Red Alert","simulator":"Magellan"}

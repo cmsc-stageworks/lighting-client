@@ -4,6 +4,7 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import {
   AlertTriangle,
   ArrowLeft,
+  ShieldOff,
   Copy,
   GitBranch,
   Globe,
@@ -21,6 +22,7 @@ import { useConfig } from '../../store/config'
 import { useRuntime } from '../../store/runtime'
 import { toast } from '../../store/toasts'
 import { formatAgo } from '../../lib/format'
+import { reducedHeldBack } from '../../lib/lightingMode'
 import {
   Badge,
   Button,
@@ -148,7 +150,16 @@ export function MappingsPage(): React.JSX.Element {
   const [simFilter, setSimFilter] = useState('')
   const [catFilter, setCatFilter] = useState('')
   const [groupFilter, setGroupFilter] = useState('')
-  const [statusFilter, setStatusFilter] = useState('')
+  const [statusFilter, setStatusFilter] = useState(
+    () => new URLSearchParams(loc.search).get('status') ?? ''
+  )
+  // Follow `?status=` links (e.g. from the lighting mode dialog) even when already mounted.
+  const [prevSearch, setPrevSearch] = useState(loc.search)
+  if (loc.search !== prevSearch) {
+    setPrevSearch(loc.search)
+    const st = new URLSearchParams(loc.search).get('status')
+    if (st) setStatusFilter(st)
+  }
   const [groupBySim, setGroupBySim] = useState(true)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [copyTarget, setCopyTarget] = useState<string[] | null>(null)
@@ -200,6 +211,11 @@ export function MappingsPage(): React.JSX.Element {
       if (statusFilter === 'fired' && !stats?.lastFiredAt) return false
       if (statusFilter === 'never' && stats?.lastFiredAt) return false
       if (statusFilter === 'problem' && !(unresolved || m.actions.length === 0)) return false
+      if (
+        statusFilter === 'reducedHeldBack' &&
+        reducedHeldBack(m, profile?.scenes ?? []).length === 0
+      )
+        return false
       if (q) {
         const s = q.toLowerCase()
         const hay = [
@@ -391,6 +407,7 @@ export function MappingsPage(): React.JSX.Element {
         !profile.scenes.some((s) => s.id === a.sceneId)
     )
     const unresolved = snapshot?.unresolvedMappings[m.id]
+    const heldBackInReduced = reducedHeldBack(m, profile.scenes)
     const sims = m.simulatorNames
     const triggerSummaries = m.triggers.map((t) => summarizeTrigger(t.preset, t.params))
     const conditionCount = m.triggers.reduce((n, t) => n + countLeafConditions(t.conditions), 0)
@@ -427,6 +444,14 @@ export function MappingsPage(): React.JSX.Element {
               </span>
             )}
             {m.actions.length === 0 && <Badge tone="warning">no actions</Badge>}
+            {heldBackInReduced.length > 0 && (
+              <span title={heldBackInReduced.join('\n')}>
+                <Badge tone="muted" className="gap-1 whitespace-nowrap">
+                  <ShieldOff size={11} />
+                  held back in Reduced
+                </Badge>
+              </span>
+            )}
           </div>
           <div className="text-[12px] text-muted flex items-center gap-1.5 mt-0.5">
             <Badge>{m.category || 'General'}</Badge>
@@ -556,7 +581,8 @@ export function MappingsPage(): React.JSX.Element {
                 { value: 'disabled', label: 'Disabled' },
                 { value: 'fired', label: 'Has fired' },
                 { value: 'never', label: 'Never fired' },
-                { value: 'problem', label: 'Needs attention' }
+                { value: 'problem', label: 'Needs attention' },
+                { value: 'reducedHeldBack', label: 'Reduced: held back' }
               ]}
             />
             <span className="ml-auto flex items-center gap-3 text-[12px] text-muted">

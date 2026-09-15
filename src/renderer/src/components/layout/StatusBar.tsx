@@ -14,6 +14,7 @@ import {
 } from '../../lib/format'
 import { Button, KeyValue, Pill } from '../ui'
 import { invoke } from '../../lib/api'
+import { LightingModeControl } from './LightingMode'
 
 function StatusPopover({
   tone,
@@ -81,6 +82,8 @@ export function StatusBar(): React.JSX.Element {
   const outputs = profile.outputs
   return (
     <div className="h-12 shrink-0 border-b border-border bg-surface flex items-center gap-2 px-4 overflow-x-auto">
+      <LightingModeControl />
+      <span className="w-px h-6 bg-border mx-1 shrink-0" />
       <StatusPopover
         tone={
           !profile.thorium.enabled

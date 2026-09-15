@@ -15,6 +15,8 @@ export interface EventTrace {
   actions: string[]
   /** true when the mapping matched but was skipped by its debounce */
   debounced?: boolean
+  /** actions the lighting mode held back (see shared/lightingMode.ts) */
+  heldBack?: { action: string; reason: string }[]
 }
 
 export interface AppEvent {
@@ -27,6 +29,11 @@ export interface AppEvent {
   simulatorName?: string
   data: Record<string, unknown>
   matchedMappingIds: string[]
+  /**
+   * Set only on events a staff member caused directly in this app (Dashboard,
+   * tray, alert override). Locked mode lets mappings fired by these through.
+   */
+  staffOrigin?: boolean
   /** populated by the rules engine as it evaluates the event */
   trace?: EventTrace[]
 }

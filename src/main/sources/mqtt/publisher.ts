@@ -77,6 +77,10 @@ export class StatusPublisher {
       }))
     )
     this.put('blackout', { on: snap.compositor.blackout })
+    this.put('lightingMode', {
+      mode: snap.lightingMode.mode,
+      since: new Date(snap.lightingMode.since).toISOString()
+    })
   }
 
   publishEvent(ev: AppEvent): void {

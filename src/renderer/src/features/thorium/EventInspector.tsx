@@ -1,10 +1,12 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import clsx from 'clsx'
-import { ChevronDown, ChevronRight, Pause, Play, Plus, Trash2 } from 'lucide-react'
+import { ChevronDown, ChevronRight, Pause, Play, Plus, ShieldOff, Trash2 } from 'lucide-react'
+import { useLocation } from 'react-router-dom'
 import type { AppEvent } from '@shared/types/events'
 import { useEvents } from '../../store/events'
 import { useConfig } from '../../store/config'
 import { compactJson, fmtTime } from '../../lib/format'
+import { heldBackReasons } from '../../lib/lightingMode'
 import { Badge, Button, Checkbox, SearchInput, Select } from '../../components/ui'
 
 const SOURCE_TONE = { thorium: 'accent', mqtt: 'info', ui: 'success', system: 'muted' } as const
@@ -24,6 +26,16 @@ export function EventInspector({
   const [q, setQ] = useState('')
   const [source, setSource] = useState('')
   const [onlyMatched, setOnlyMatched] = useState(false)
+  const loc = useLocation()
+  const [onlyHeldBack, setOnlyHeldBack] = useState(
+    () => new URLSearchParams(loc.search).get('heldBack') === '1'
+  )
+  // Follow `?heldBack=1` links (e.g. from the lighting mode banner) even when already mounted.
+  const [prevSearch, setPrevSearch] = useState(loc.search)
+  if (loc.search !== prevSearch) {
+    setPrevSearch(loc.search)
+    if (new URLSearchParams(loc.search).get('heldBack') === '1') setOnlyHeldBack(true)
+  }
   const [hideNoise, setHideNoise] = useState(true)
   const [open, setOpen] = useState<string | null>(null)
   const [follow, setFollow] = useState(true)
@@ -51,6 +63,7 @@ export function EventInspector({
       events.filter((e) => {
         if (source && e.source !== source) return false
         if (onlyMatched && e.matchedMappingIds.length === 0) return false
+        if (onlyHeldBack && heldBackReasons(e).length === 0) return false
         if (hideNoise && e.type === 'thorium.event' && noise.has(e.name)) return false
         if (q) {
           const s = q.toLowerCase()
@@ -63,7 +76,7 @@ export function EventInspector({
         }
         return true
       }),
-    [events, source, onlyMatched, hideNoise, noise, q]
+    [events, source, onlyMatched, onlyHeldBack, hideNoise, noise, q]
   )
   const shown = filtered.slice(-400)
 
@@ -95,6 +108,7 @@ export function EventInspector({
           className="w-36"
         />
         <Checkbox checked={onlyMatched} onChange={setOnlyMatched} label="Matched only" />
+        <Checkbox checked={onlyHeldBack} onChange={setOnlyHeldBack} label="Held back only" />
         <Checkbox checked={hideNoise} onChange={setHideNoise} label="Hide noisy events" />
         <span className="ml-auto flex items-center gap-1.5">
           <span className="text-[12px] text-muted">{shown.length} shown</span>
@@ -162,6 +176,12 @@ export function EventInspector({
                   <span className="text-faint truncate grow">
                     {compactJson(stripNoise(e.data), 120)}
                   </span>
+                  {heldBackReasons(e).length > 0 && (
+                    <Badge tone="warning" className="gap-1">
+                      <ShieldOff size={11} />
+                      held back
+                    </Badge>
+                  )}
                   {e.matchedMappingIds.length > 0 && (
                     <Badge tone="accent">
                       {e.matchedMappingIds.length} rule{e.matchedMappingIds.length > 1 ? 's' : ''}
@@ -182,7 +202,7 @@ export function EventInspector({
                     </div>
                     {e.trace && e.trace.length > 0 && (
                       <div className="mb-2 rounded-lg border border-border bg-surface-2/50 p-2.5 text-[12px]">
-                        <div className="text-muted mb-1">Why this fired</div>
+                        <div className="text-muted mb-1">Why this fired (or didn’t)</div>
                         <ul className="flex flex-col gap-1">
                           {e.trace.map((t, i) => (
                             <li key={i}>
@@ -194,9 +214,14 @@ export function EventInspector({
                                 </span>
                               ) : t.actions.length ? (
                                 <span className="text-muted"> → {t.actions.join(' · ')}</span>
-                              ) : (
+                              ) : t.heldBack?.length ? null : (
                                 <span className="text-faint"> → no actions</span>
                               )}
+                              {t.heldBack?.map((h, k) => (
+                                <div key={k} className="text-warning ml-3">
+                                  ⊘ {h.action} held back — {h.reason}
+                                </div>
+                              ))}
                             </li>
                           ))}
                         </ul>

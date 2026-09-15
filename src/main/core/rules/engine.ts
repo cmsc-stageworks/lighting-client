@@ -1,7 +1,8 @@
-import type { Mapping } from '@shared/types/config'
+import type { Action, Mapping } from '@shared/types/config'
 import type { AppEvent } from '@shared/types/events'
 import type { ReferenceData } from '@shared/types/state'
 import { compileMapping, matchMapping, type CompiledMapping } from '@shared/triggers/matcher'
+import { gateAction, gateRequestForAction, type LightingMode } from '@shared/lightingMode'
 import { getLogger } from '../../logging'
 import type { ActionRunner } from './actions'
 
@@ -12,6 +13,19 @@ interface CompiledEntry {
   compiled: CompiledMapping
 }
 
+export interface ModeGate {
+  mode: () => LightingMode
+  /** called once per mapping that had actions held back */
+  onHeldBack: (text: string) => void
+}
+
+export interface GatedActions {
+  allowed: Action[]
+  heldBack: { action: string; reason: string }[]
+}
+
+const NORMAL_GATE: ModeGate = { mode: () => 'normal', onHeldBack: () => undefined }
+
 export class RulesEngine {
   private compiled: CompiledEntry[] = []
   private lastFired = new Map<string, number>()
@@ -19,7 +33,26 @@ export class RulesEngine {
   private refData: ReferenceData | null = null
   private mappings: Mapping[] = []
 
-  constructor(private runner: ActionRunner) {}
+  constructor(
+    private runner: ActionRunner,
+    private gate: ModeGate = NORMAL_GATE
+  ) {}
+
+  /** Split a mapping's actions into what the lighting mode allows for this event. */
+  gateActions(mapping: Mapping, event: AppEvent): GatedActions {
+    const mode = this.gate.mode()
+    const out: GatedActions = { allowed: [], heldBack: [] }
+    for (const action of mapping.actions) {
+      const reason = gateAction(
+        mode,
+        gateRequestForAction(action, (id) => this.runner.sceneById(id)),
+        { staffOrigin: event.staffOrigin === true }
+      )
+      if (reason) out.heldBack.push({ action: this.runner.describe(action), reason })
+      else out.allowed.push(action)
+    }
+    return out
+  }
 
   setMappings(mappings: Mapping[]): void {
     this.mappings = mappings
@@ -89,6 +122,18 @@ export class RulesEngine {
           continue
         }
       }
+      const { allowed, heldBack } = this.gateActions(mapping, event)
+      if (heldBack.length) this.gate.onHeldBack(`${mapping.name} — ${heldBack[0].reason}`)
+      if (allowed.length === 0 && heldBack.length > 0) {
+        // Everything was held back: record why, but it did not fire.
+        ;(event.trace ??= []).push({
+          mappingId: mapping.id,
+          mappingName: mapping.name,
+          actions: [],
+          heldBack
+        })
+        continue
+      }
       this.lastFired.set(mapping.id, now)
       const s = this.stats.get(mapping.id) ?? { lastFiredAt: null, count: 0 }
       s.lastFiredAt = now
@@ -98,16 +143,17 @@ export class RulesEngine {
       ;(event.trace ??= []).push({
         mappingId: mapping.id,
         mappingName: mapping.name,
-        actions: mapping.actions.map((a) => this.runner.describe(a))
+        actions: allowed.map((a) => this.runner.describe(a)),
+        ...(heldBack.length ? { heldBack } : {})
       })
-      void this.runner.run(mapping, event)
+      void this.runner.run(mapping, event, allowed)
     }
   }
 
-  /** Dry-run: which mappings would match (no actions, no stats). */
-  evaluate(event: AppEvent): Mapping[] {
+  /** Dry-run: which mappings would match and what the lighting mode would allow (no actions, no stats). */
+  evaluate(event: AppEvent): ({ mapping: Mapping } & GatedActions)[] {
     return this.compiled
       .filter(({ compiled }) => !compiled.unresolved && matchMapping(compiled, event))
-      .map((c) => c.mapping)
+      .map((c) => ({ mapping: c.mapping, ...this.gateActions(c.mapping, event) }))
   }
 }

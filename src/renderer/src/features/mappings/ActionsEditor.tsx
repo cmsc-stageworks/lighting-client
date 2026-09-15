@@ -1,7 +1,8 @@
 import React from 'react'
-import { ArrowDown, ArrowUp, Plus, Trash2 } from 'lucide-react'
+import { ArrowDown, ArrowUp, Plus, ShieldOff, Trash2 } from 'lucide-react'
 import type { Action, ActionTarget } from '@shared/types/config'
 import { LAYER_IDS } from '@shared/constants'
+import { gateAction, gateRequestForAction } from '@shared/lightingMode'
 import { useConfig } from '../../store/config'
 import { useRuntime } from '../../store/runtime'
 import { Button, Checkbox, Field, Input, NumberInput, Select, TextArea } from '../../components/ui'
@@ -360,6 +361,19 @@ export function ActionsEditor({
                 )}
               </>
             )}
+            {(a.kind === 'activateScene' || a.kind === 'blackout') &&
+              gateAction(
+                'reduced',
+                gateRequestForAction(a, (id) => scenes.find((s) => s.id === id)),
+                { staffOrigin: false }
+              ) && (
+                <div className="col-span-2 text-[12px] text-warning inline-flex items-center gap-1.5">
+                  <ShieldOff size={13} className="shrink-0" />
+                  {a.kind === 'blackout'
+                    ? 'Held back in Reduced Effects and Locked modes — blackout is manual-only there.'
+                    : 'This scene isn’t cleared for Reduced Effects, so this action is held back in that mode.'}
+                </div>
+              )}
           </div>
           <Button
             size="sm"

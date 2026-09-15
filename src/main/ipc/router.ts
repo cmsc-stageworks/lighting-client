@@ -7,6 +7,7 @@ import { AppSettingsSchema } from '@shared/schema/config.schema'
 import type { AppEvent } from '@shared/types/events'
 import type { ImportPreview } from '@shared/types/state'
 import { DMX_CHANNELS } from '@shared/constants'
+import { LIGHTING_MODES } from '@shared/lightingMode'
 import { logsDirectory, tailLog } from '../logging'
 import { listNetworkInterfaces, listSerialDevices } from '../outputs/serialDevices'
 import type { Services } from '../services'
@@ -155,6 +156,15 @@ export function registerIpc(services: Services, getWindow: () => BrowserWindow |
   )
   handle('compositor.setBlackout', z.tuple([z.boolean()]), (on) => s.setBlackout(on))
   handle('compositor.setGrandMaster', z.tuple([num.min(0).max(1)]), (v) => s.setGrandMaster(v))
+  handle(
+    'lightingMode.set',
+    z.tuple([
+      z.enum(LIGHTING_MODES),
+      z.object({ releaseUncleared: z.boolean().optional(), catchUpAlerts: z.boolean().optional() })
+    ]),
+    (mode, opts) => s.setLightingMode(mode, opts, 'ui')
+  )
+  handle('lightingMode.keepForToday', null, () => s.keepLightingModeForToday())
   handle('dmx.subscribeUniverse', z.tuple([num.int().min(1), z.boolean()]), (u, on) =>
     s.subscribeUniverse(u, on)
   )

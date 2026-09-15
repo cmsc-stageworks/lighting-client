@@ -203,6 +203,8 @@ export const SceneSchema = z.object({
   fadeOutMs: z.number().int().min(0).max(600_000).default(0),
   defaultLayerId: id,
   showOnDashboard: z.boolean().default(true),
+  /** A human has checked this look is comfortable for light-sensitive guests. */
+  reducedEffectsCleared: z.boolean().default(false),
   notes: z.string().max(2000).default('')
 })
 export type Scene = z.infer<typeof SceneSchema>

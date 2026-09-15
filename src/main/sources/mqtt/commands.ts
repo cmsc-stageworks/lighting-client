@@ -1,4 +1,6 @@
 import { z } from 'zod'
+import type { Scene } from '@shared/types/config'
+import type { GateRequest } from '@shared/lightingMode'
 
 /** JSON commands accepted on `<base>/cmd` (PRD F-MQTT-07). */
 export const MqttCommandSchema = z.discriminatedUnion('action', [
@@ -42,4 +44,24 @@ export function parseMqttCommand(
     ok: false,
     error: r.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ')
   }
+}
+
+/**
+ * How the lighting-mode gate should judge a command. The command topic counts as
+ * an automatic source. An unknown scene is reported as cleared so the caller's
+ * "scene not found" warning still surfaces in Reduced Effects.
+ */
+export function commandGateRequest(
+  cmd: MqttCommand,
+  sceneByName: (name: string) => Pick<Scene, 'name' | 'reducedEffectsCleared'> | undefined
+): GateRequest {
+  if (cmd.action === 'activateScene') {
+    const scene = sceneByName(cmd.scene)
+    return {
+      kind: 'activateScene',
+      sceneName: scene?.name ?? cmd.scene,
+      sceneCleared: scene ? scene.reducedEffectsCleared : true
+    }
+  }
+  return { kind: cmd.action }
 }

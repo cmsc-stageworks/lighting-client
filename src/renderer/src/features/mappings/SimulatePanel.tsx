@@ -191,6 +191,11 @@ export function SimulatePanel(): React.JSX.Element {
                       <li key={m.mappingId} className="card px-3 py-2 text-[13px]">
                         <div className="font-medium">{m.mappingName}</div>
                         <div className="text-muted">{m.actions.join(' → ')}</div>
+                        {m.heldBack?.map((h, k) => (
+                          <div key={k} className="text-warning text-[12px]">
+                            ⊘ {h.action} held back — {h.reason}
+                          </div>
+                        ))}
                       </li>
                     ))}
                   </ul>

@@ -1,7 +1,7 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import clsx from 'clsx'
 import { useNavigate } from 'react-router-dom'
-import { Activity, Ban, Clapperboard, Eraser } from 'lucide-react'
+import { Activity, Ban, Clapperboard, Eraser, ShieldCheck, ShieldOff } from 'lucide-react'
 import type { Scene } from '@shared/types/config'
 import { ALERT_LEVELS, ALERT_LEVEL_COLORS } from '@shared/constants'
 import { useConfig } from '../../store/config'
@@ -9,6 +9,7 @@ import { useRuntime } from '../../store/runtime'
 import { useEvents } from '../../store/events'
 import { invoke } from '../../lib/api'
 import { fmtTime, formatAgo } from '../../lib/format'
+import { MODE_ICON, heldBackReasons } from '../../lib/lightingMode'
 import {
   Button,
   Card,
@@ -24,7 +25,8 @@ function SceneButton({
   scene,
   active,
   onPress,
-  simulatorName
+  simulatorName,
+  needsConfirm
 }: {
   scene: Scene
   active: {
@@ -34,8 +36,28 @@ function SceneButton({
   }[]
   onPress: () => void
   simulatorName: string | null
+  /** Reduced Effects and this scene isn't cleared: first tap asks, second tap activates. */
+  needsConfirm: boolean
 }): React.JSX.Element {
   const isActive = active.length > 0
+  const [asking, setAsking] = useState(false)
+  const askTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(
+    () => () => {
+      if (askTimer.current) clearTimeout(askTimer.current)
+    },
+    []
+  )
+  const handlePress = (): void => {
+    if (needsConfirm && !asking) {
+      setAsking(true)
+      askTimer.current = setTimeout(() => setAsking(false), 4000)
+      return
+    }
+    if (askTimer.current) clearTimeout(askTimer.current)
+    setAsking(false)
+    onPress()
+  }
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
     if (!isActive) return
@@ -57,10 +79,16 @@ function SceneButton({
       : 0
   return (
     <button
-      onClick={onPress}
+      onClick={handlePress}
       className={clsx(
         'relative overflow-hidden text-left rounded-2xl border p-4 min-h-[96px] flex flex-col justify-between transition-all active:scale-[0.98]',
-        isActive ? 'border-transparent ring-2' : 'border-border bg-surface hover:bg-surface-2'
+        isActive
+          ? 'border-transparent ring-2'
+          : asking
+            ? 'border-warning bg-warning/10'
+            : needsConfirm
+              ? 'border-dashed border-border-strong bg-surface hover:bg-surface-2'
+              : 'border-border bg-surface hover:bg-surface-2'
       )}
       style={
         isActive
@@ -73,6 +101,25 @@ function SceneButton({
     >
       <div className="flex items-start justify-between gap-2">
         <span className="w-3 h-3 rounded-full mt-1 shrink-0" style={{ background: scene.color }} />
+        {scene.reducedEffectsCleared ? (
+          <span
+            className="inline-flex items-center gap-1 text-[11px] text-success mr-auto"
+            title="Cleared for Reduced Effects"
+          >
+            <ShieldCheck size={13} />
+            Cleared
+          </span>
+        ) : (
+          needsConfirm && (
+            <span
+              className="inline-flex items-center gap-1 text-[11px] text-warning mr-auto"
+              title="Not cleared for Reduced Effects"
+            >
+              <ShieldOff size={13} />
+              Not cleared
+            </span>
+          )
+        )}
         <span className="text-[11px] text-muted uppercase tracking-wider">
           {timed
             ? `${(scene.behavior.kind === 'timed' ? scene.behavior.holdMs : 0) / 1000}s`
@@ -81,20 +128,27 @@ function SceneButton({
       </div>
       <div>
         <div className="font-semibold leading-tight">{scene.name}</div>
-        <div className="text-[12px] text-muted mt-0.5 truncate">
-          {isActive
-            ? `Active${
-                active.some((a) => a.simulatorName)
-                  ? ' · ' +
-                    active
-                      .map((a) => a.simulatorName)
-                      .filter(Boolean)
-                      .join(', ')
-                  : ''
-              }`
-            : scene.addressing === 'relative'
-              ? (simulatorName ?? 'all simulators')
-              : 'absolute'}
+        <div
+          className={clsx(
+            'text-[12px] mt-0.5 truncate',
+            asking ? 'text-warning font-semibold' : 'text-muted'
+          )}
+        >
+          {asking
+            ? 'Tap again to use'
+            : isActive
+              ? `Active${
+                  active.some((a) => a.simulatorName)
+                    ? ' · ' +
+                      active
+                        .map((a) => a.simulatorName)
+                        .filter(Boolean)
+                        .join(', ')
+                    : ''
+                }`
+              : scene.addressing === 'relative'
+                ? (simulatorName ?? 'all simulators')
+                : 'absolute'}
         </div>
       </div>
       {isActive && timed && (
@@ -144,6 +198,8 @@ export function DashboardPage(): React.JSX.Element {
     else void invoke('scene.activate', scene.id, target)
   }
   const recent = events.slice(-8).reverse()
+  const mode = snap.lightingMode.mode
+  const ModeIcon = MODE_ICON[mode]
 
   return (
     <div className="max-w-6xl mx-auto">
@@ -185,6 +241,24 @@ export function DashboardPage(): React.JSX.Element {
           this room’s flight. Until then no mappings run; Dashboard buttons still work.
         </Callout>
       )}
+      {mode !== 'normal' && (
+        <Callout tone={mode === 'reduced' ? 'warning' : 'info'} className="mb-5">
+          <span className="inline-flex items-center gap-2">
+            <ModeIcon size={15} className="shrink-0" />
+            {mode === 'reduced' ? (
+              <span>
+                <b>Reduced Effects.</b> Thorium and MQTT can only turn on cleared scenes. Buttons
+                marked “Not cleared” need a second tap.
+              </span>
+            ) : (
+              <span>
+                <b>Lights are locked.</b> Press a button below or use the Alert override to change
+                the look. Thorium and MQTT can’t change the lights.
+              </span>
+            )}
+          </span>
+        </Callout>
+      )}
       {/* Alert levels */}
       {snap.thorium.simulatorsInScope.length > 0 && (
         <div className="flex flex-wrap gap-2 mb-5">
@@ -203,7 +277,13 @@ export function DashboardPage(): React.JSX.Element {
                 Alert {s.alertLevel?.toUpperCase() ?? '?'}
                 {s.training && ' · training'}
               </span>
-              <Tooltip content="Manual alert override (fires the same mappings as a Thorium alert change)">
+              <Tooltip
+                content={
+                  mode === 'locked'
+                    ? 'Sets the lights to this alert level and holds it. Thorium alert changes are ignored while Locked.'
+                    : 'Manual alert override (fires the same mappings as a Thorium alert change)'
+                }
+              >
                 <select
                   className="input !h-7 !py-0 !w-24 text-[12px]"
                   value={snap.alertOverrides[s.name] ?? ''}
@@ -251,6 +331,11 @@ export function DashboardPage(): React.JSX.Element {
                         active={activeFor(scene)}
                         onPress={() => press(scene)}
                         simulatorName={simName || null}
+                        needsConfirm={
+                          mode === 'reduced' &&
+                          !scene.reducedEffectsCleared &&
+                          !(activeFor(scene).length > 0 && scene.behavior.kind === 'latch')
+                        }
                       />
                     ))}
                 </div>
@@ -340,6 +425,15 @@ export function DashboardPage(): React.JSX.Element {
                       </span>
                       {e.simulatorName && <span className="text-faint"> · {e.simulatorName}</span>}
                     </span>
+                    {heldBackReasons(e).length > 0 && (
+                      <span
+                        className="ml-auto text-faint shrink-0 inline-flex items-center gap-1"
+                        title={heldBackReasons(e).join('\n')}
+                      >
+                        <ShieldOff size={11} />
+                        held back
+                      </span>
+                    )}
                     {e.matchedMappingIds.length > 0 && (
                       <span className="ml-auto text-faint shrink-0">
                         {e.matchedMappingIds.length} rule{e.matchedMappingIds.length > 1 ? 's' : ''}

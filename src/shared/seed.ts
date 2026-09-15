@@ -59,6 +59,7 @@ export function seedScenes(): SeededScenes {
       fadeOutMs: 0,
       defaultLayerId: LAYER_IDS.alert,
       showOnDashboard: true,
+      reducedEffectsCleared: false,
       notes:
         'Seeded starter. Channel offsets 0–5 are relative to the simulator base address; edit to match your controller’s trigger values.'
     }
@@ -85,6 +86,7 @@ export function seedScenes(): SeededScenes {
     fadeOutMs: 0,
     defaultLayerId: LAYER_IDS.effect,
     showOnDashboard: true,
+    reducedEffectsCleared: false,
     notes: 'Seeded example of a timed effect scene.'
   }
   byKey.flash = flash
@@ -103,6 +105,7 @@ export function seedScenes(): SeededScenes {
     fadeOutMs: 0,
     defaultLayerId: LAYER_IDS.manual,
     showOnDashboard: true,
+    reducedEffectsCleared: false,
     notes: 'Seeded example of a latching manual scene.'
   }
   byKey.work = work

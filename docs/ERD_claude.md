@@ -287,6 +287,7 @@ export interface Scene {
   fadeOutMs: number;
   defaultLayerId: string;
   showOnDashboard: boolean;
+  reducedEffectsCleared: boolean;   // human-checked as safe for light-sensitive guests (schema v5, PRD §6.9)
   notes: string;
 }
 
@@ -341,6 +342,8 @@ export interface AppEvent {
   simulatorName?: string;
   data: Record<string, unknown>;   // condition paths resolve against this
   matchedMappingIds: string[];     // filled by RulesEngine before forwarding to the log
+  staffOrigin?: boolean;           // set only by direct staff commands (Dashboard, tray, alert override)
+  trace?: EventTrace[];            // per matched mapping: actions run, debounce, heldBack[{action, reason}]
 }
 
 export interface ActiveSceneInstance {
@@ -369,6 +372,8 @@ export interface RuntimeSnapshot {
   compositor: { blackout: boolean; grandMaster: number;
                 active: Array<Pick<ActiveSceneInstance,'instanceId'|'sceneId'|'layerId'|'simulatorName'|'startedAt'|'holdUntil'|'releaseStartedAt'>> };
   mappingsStats: Record<string, { lastFiredAt: number | null; count: number }>;
+  lightingMode: { mode: 'normal' | 'reduced' | 'locked'; since: number; staleDay: boolean;
+                  heldBack: { count: number; last: { ts: number; text: string } | null } };
 }
 export type ConnState = 'disabled' | 'connecting' | 'connected' | 'reconnecting' | 'error';
 export interface OutputHealth { state: 'disabled' | 'starting' | 'ok' | 'error'; reason?: string; fps: number; lastSendAt: number | null; iface?: string; }
@@ -383,10 +388,22 @@ export interface OutputHealth { state: 'disabled' | 'starting' | 'ok' | 'error';
 | `thorium.event` | Thorium event name (e.g. `changeSimulatorAlertLevel`) | the raw firehose payload: `{ event, clientId, isMutation, core, ...args }` | `ThoriumAdapter` from `events` subscription |
 | `thorium.state` | derived name (`alertLevel.changed`, `training.changed`, `lighting.actionChanged`, `battery.below`, `battery.above`, `reactor.ejected`, `reactor.externalPower`, `reactor.heatAbove`, `system.damaged`, `system.repaired`, `system.powerChanged`, `flight.started`, `flight.paused`, `flight.resumed`, `flight.reset`, `shields.raised`, `shields.lowered`, `stealth.changed`, `client.assigned`) | derived fields (`{ level, previous }`, `{ threshold, level }`, `{ systemName, type }` …) | `derived.ts` diffing state subscriptions |
 | `mqtt.message` | topic | `{ topic, payload: string, json?: unknown, qos, retain }` | `MqttAdapter` |
-| `ui.action` | `scene.activate`, `scene.release`, `blackout`, `releaseAll`, `grandMaster`, `alertOverride` | action-specific | `UiAdapter` |
+| `ui.action` | `scene.activate`, `scene.release`, `blackout`, `releaseAll`, `grandMaster`, `alertOverride`, `lightingMode` | action-specific | `UiAdapter` |
 | `system` | `startup`, `thorium.connected`, `thorium.disconnected`, `mqtt.connected`, `output.error`… | | services |
 
 Simulator attribution: `thorium.event` payloads that carry `simulatorId` are tagged; events that carry only a system `id` (e.g. `reactorBatteryChargeLevel`) are resolved through the `SimulatorRegistry` system→simulator index built from `systemsUpdate`. Events outside the instance's simulator scope are dropped before they reach the bus (they are still counted for the "events/sec" metric).
+
+### 5.1a Lighting modes
+
+`shared/lightingMode.ts` holds the only rule table (`gateAction(mode, request, { staffOrigin })`, PRD §6.9). It returns `null` (allowed) or a human reason. Call sites:
+
+- `RulesEngine.onEvent`, after debounce and before running: actions are split into allowed and held back; held-back ones go into `trace.heldBack`. A mapping with nothing allowed is not counted as fired (no `matchedMappingIds`, stats or debounce stamp). `evaluate()` reports the same split for Simulate.
+- `Services.onMqttCommand`, before dispatch: a held-back command emits `system`/`lightingMode.heldBack` so it appears in the inspector.
+- Renderer hints (Mappings badge, ActionsEditor, mode dialog) call it with `mode: 'reduced'`.
+
+Direct staff commands (`activateSceneByUser`, blackout, release all, Grand Master, alert override from the UI) never pass through the gate. Events they emit carry `staffOrigin`; Locked lets mappings fired by those through, Reduced still filters them.
+
+Mode state lives in `Services` and is persisted by `main/config/modeState.ts` as `userData/lighting-mode.json` `{ mode, since, day }` (atomic write, outside config.json). `load()` restores it only when `day` is today; it runs in `init()` before any source starts. `setLightingMode(mode, { releaseUncleared, catchUpAlerts })` optionally releases active scenes that aren't cleared (entering Reduced) and re-asserts each in-scope simulator's alert level (moving to a less restrictive mode), then emits `ui.action`/`lightingMode`. `staleDay` is computed per snapshot; nothing switches automatically.
 
 ### 5.2 Trigger presets
 
@@ -698,6 +715,9 @@ interface IpcApi {
   'thorium.probe': (host, port, secure) => ThoriumProbeResult;   // read flights without saving settings;
   'thorium.getReferenceData': () => ReferenceData;                        // macros, buttons, missions, simulators
   'thorium.setAlertOverride': (simulatorName: string, level: string | null) => void;
+  // lighting mode (§5.1a)
+  'lightingMode.set': (mode: LightingMode, opts: { releaseUncleared?: boolean; catchUpAlerts?: boolean }) => void;
+  'lightingMode.keepForToday': () => void;
   // mqtt
   'mqtt.test': () => MqttTestReport;
   'mqtt.publish': (topic: string, payload: string, qos: 0|1|2, retain: boolean) => void;
@@ -728,6 +748,7 @@ Sidebar (icon + label): **Dashboard**, **Scenes**, **Mappings**, then a "Setup" 
 
 ### 12.2 App shell
 
+- **Lighting mode control** (first item in the status bar): Normal / Reduced / Locked segmented control; any change opens `LightingModeDialog`. `LightingModeBanner` sits under the blackout banner while not Normal (mode, since, held-back count, "What was held back?" popover, Return to Normal / Keep for today).
 - **Status bar** (top, always visible): pills for Thorium, MQTT, each Output; the active profile name; blackout banner (full-width red when on); grand master readout. Clicking a pill opens a popover with reason, last change, and a "Go to settings" link `[F-UX-01]`.
 - **Toasts** bottom-right, with an "Undo" affordance for deletes `[F-UX-07]`.
 
@@ -752,11 +773,12 @@ Sidebar (icon + label): **Dashboard**, **Scenes**, **Mappings**, then a "Setup" 
 - `ConditionBuilder`: rows of path / op / value with path autocomplete from recent events of the chosen name.
 - `SceneButton`: large, color-tinted, shows active state (ring + timer bar for timed scenes) and which simulator it is active for.
 - `InlineConfirm`: replaces destructive buttons with "Delete? Yes / No" inline.
+- `LightingModeControl` / `LightingModeDialog` / `LightingModeBanner` (`components/layout/LightingMode.tsx`): see §12.2. The dialog focuses the primary button when moving to a safer mode and Cancel otherwise. `SceneButton` shows a Cleared badge and, in Reduced Effects, needs a second tap for scenes that aren't cleared.
 
 ## 13. Startup, tray, kiosk
 
 - `app.requestSingleInstanceLock()`; a second launch focuses the existing window.
-- Tray with status icon (green/amber/red) and menu: Show, Blackout toggle, Release all, Quit. `closeToTray` keeps main running.
+- Tray with status icon (green/amber/red) and menu: Show, status lines (including `Lighting: <mode>`), Blackout toggle, Release all, Lighting mode radio submenu (Normal asks for a native confirm), Quit. `closeToTray` keeps main running.
 - `app.setLoginItemSettings({ openAtLogin, openAsHidden: startMinimized })` on Windows/macOS.
 - `before-quit`: if `sendZeroFrameOnExit`, outputs send an all-zero frame and wait up to 500 ms for drain; `clientDisconnect` to Thorium; MQTT `status offline` published (not retained-will-only) then `end()`.
 - `--headless` (P1): skip window creation; tray still available.

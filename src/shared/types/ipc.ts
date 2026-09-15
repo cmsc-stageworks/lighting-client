@@ -1,5 +1,6 @@
 import type { AppConfig, AppSettings, Profile } from '../schema/config.schema'
 import type { AppEvent, MqttMessageRecord } from './events'
+import type { LightingMode } from '../lightingMode'
 import type {
   ImportPreview,
   MqttTestReport,
@@ -43,6 +44,11 @@ export interface IpcApi {
   'compositor.releaseLayer': (layerId: string) => void
   'compositor.setBlackout': (on: boolean) => void
   'compositor.setGrandMaster': (value: number) => void
+  'lightingMode.set': (
+    mode: LightingMode,
+    opts: { releaseUncleared?: boolean; catchUpAlerts?: boolean }
+  ) => void
+  'lightingMode.keepForToday': () => void
   'dmx.subscribeUniverse': (universe: number, on: boolean) => void
   'dmx.setTestChannel': (universe: number, channel: number, value: number | null) => void
   'dmx.clearTest': () => void

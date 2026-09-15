@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react'
 import clsx from 'clsx'
-import { ArrowLeft, Clapperboard, Copy, Play, Plus, Square } from 'lucide-react'
+import { ArrowLeft, Clapperboard, Copy, Play, Plus, ShieldCheck, Square } from 'lucide-react'
 import type { Scene } from '@shared/types/config'
 import { LAYER_IDS } from '@shared/constants'
 import { uuid } from '@shared/utils'
@@ -11,6 +11,7 @@ import { toast } from '../../store/toasts'
 import {
   Badge,
   Button,
+  Checkbox,
   EmptyState,
   InlineConfirm,
   PageHeader,
@@ -26,6 +27,7 @@ export function ScenesPage(): React.JSX.Element {
   const [editing, setEditing] = useState<string | null>(null)
   const [q, setQ] = useState('')
   const [cat, setCat] = useState('')
+  const [clearedFilter, setClearedFilter] = useState('')
 
   const categories = useMemo(
     () => [...new Set((profile?.scenes ?? []).map((s) => s.category || 'General'))].sort(),
@@ -36,8 +38,15 @@ export function ScenesPage(): React.JSX.Element {
   const filtered = profile.scenes.filter(
     (s) =>
       (!q || s.name.toLowerCase().includes(q.toLowerCase())) &&
-      (!cat || (s.category || 'General') === cat)
+      (!cat || (s.category || 'General') === cat) &&
+      (!clearedFilter || (clearedFilter === 'cleared') === s.reducedEffectsCleared)
   )
+  const clearedCount = profile.scenes.filter((s) => s.reducedEffectsCleared).length
+  const setCleared = (id: string, v: boolean): void =>
+    update((d) => ({
+      ...d,
+      scenes: d.scenes.map((x) => (x.id === id ? { ...x, reducedEffectsCleared: v } : x))
+    }))
 
   const create = (): void => {
     const scene: Scene = {
@@ -54,6 +63,7 @@ export function ScenesPage(): React.JSX.Element {
       defaultLayerId:
         profile.layers.find((l) => l.id === LAYER_IDS.scene)?.id ?? profile.layers[0].id,
       showOnDashboard: true,
+      reducedEffectsCleared: false,
       notes: ''
     }
     update((d) => ({ ...d, scenes: [...d.scenes, scene] }))
@@ -64,6 +74,8 @@ export function ScenesPage(): React.JSX.Element {
       ...s,
       id: uuid(),
       name: `${s.name} copy`,
+      // Clearance is a deliberate check of a specific look; a copy is usually edited.
+      reducedEffectsCleared: false,
       entries: s.entries.map((e) => ({ ...e }))
     }
     update((d) => ({ ...d, scenes: [...d.scenes, copy] }))
@@ -154,8 +166,27 @@ export function ScenesPage(): React.JSX.Element {
           ]}
           className="w-48"
         />
-        <span className="text-muted text-[13px] ml-auto">
-          {filtered.length} of {profile.scenes.length}
+        <Select
+          value={clearedFilter}
+          onChange={setClearedFilter}
+          options={[
+            { value: '', label: 'Reduced Effects: all' },
+            { value: 'cleared', label: 'Cleared' },
+            { value: 'not', label: 'Not cleared' }
+          ]}
+          className="w-52"
+        />
+        <span className="text-muted text-[13px] ml-auto inline-flex items-center gap-3">
+          <span
+            className="inline-flex items-center gap-1"
+            title="Scenes cleared for Reduced Effects mode"
+          >
+            <ShieldCheck size={13} className="text-success" />
+            {clearedCount} of {profile.scenes.length} cleared
+          </span>
+          <span>
+            {filtered.length} of {profile.scenes.length}
+          </span>
         </span>
       </div>
       {profile.scenes.length === 0 ? (
@@ -180,6 +211,12 @@ export function ScenesPage(): React.JSX.Element {
                 <th className="text-left font-semibold px-3 py-2.5">Channels</th>
                 <th className="text-left font-semibold px-3 py-2.5">Behavior</th>
                 <th className="text-left font-semibold px-3 py-2.5">Layer</th>
+                <th
+                  className="text-left font-semibold px-3 py-2.5"
+                  title="Cleared for Reduced Effects: safe for guests with light sensitivity"
+                >
+                  Cleared
+                </th>
                 <th className="text-right font-semibold px-4 py-2.5">Actions</th>
               </tr>
             </thead>
@@ -217,6 +254,13 @@ export function ScenesPage(): React.JSX.Element {
                     </td>
                     <td className="px-3 py-2.5 text-muted">
                       {profile.layers.find((l) => l.id === s.defaultLayerId)?.name ?? '?'}
+                    </td>
+                    <td className="px-3 py-2.5" onClick={(e) => e.stopPropagation()}>
+                      <Checkbox
+                        checked={s.reducedEffectsCleared}
+                        onChange={(v) => setCleared(s.id, v)}
+                        label={<span className="sr-only">Cleared for Reduced Effects</span>}
+                      />
                     </td>
                     <td className="px-4 py-2.5">
                       <div

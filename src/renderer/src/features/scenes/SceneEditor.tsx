@@ -347,6 +347,18 @@ export function SceneEditor({
               label="Show on Dashboard"
             />
           </div>
+          <div className="mt-3">
+            <Checkbox
+              checked={scene.reducedEffectsCleared}
+              onChange={(v) => onChange({ ...scene, reducedEffectsCleared: v })}
+              label="Cleared for Reduced Effects"
+            />
+            <div className="text-muted text-[12px] mt-1 ml-7">
+              Tick this if the look is comfortable for guests with light sensitivity (no strobing,
+              flashing or sudden jumps). In Reduced Effects mode, only cleared scenes can be turned
+              on by Thorium or MQTT.
+            </div>
+          </div>
         </Card>
         <Card>
           <Field label="Behavior">

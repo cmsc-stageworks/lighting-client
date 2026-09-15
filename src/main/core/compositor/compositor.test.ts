@@ -36,6 +36,7 @@ function scene(over: Partial<Scene>): Scene {
     fadeOutMs: 0,
     defaultLayerId: LAYER_IDS.alert,
     showOnDashboard: true,
+    reducedEffectsCleared: false,
     notes: '',
     ...over
   }

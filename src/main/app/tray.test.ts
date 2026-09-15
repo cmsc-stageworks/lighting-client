@@ -48,6 +48,7 @@ function snap(over: Partial<RuntimeSnapshot> = {}): RuntimeSnapshot {
     mappingsStats: {},
     unresolvedMappings: {},
     alertOverrides: {},
+    lightingMode: { mode: 'normal', since: 0, staleDay: false, heldBack: { count: 0, last: null } },
     ...over
   } as RuntimeSnapshot
 }
@@ -100,7 +101,11 @@ describe('tray', () => {
     expect(statusLines(snap())).toEqual([
       'Thorium: connected',
       'MQTT: connected',
-      'Outputs: 1/1 ok'
+      'Outputs: 1/1 ok',
+      'Lighting: Normal'
     ])
+    expect(statusLines(snap({ lightingMode: { ...snap().lightingMode, mode: 'locked' } }))[3]).toBe(
+      'Lighting: Locked'
+    )
   })
 })

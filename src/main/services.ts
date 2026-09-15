@@ -4,9 +4,17 @@ import type { Profile } from '@shared/types/config'
 import type { AppEvent } from '@shared/types/events'
 import type { ReferenceData, RuntimeSnapshot, SimulateReport } from '@shared/types/state'
 import { DMX_CHANNELS, LAYER_IDS } from '@shared/constants'
+import {
+  LIGHTING_MODE_INFO,
+  LIGHTING_MODE_RANK,
+  gateAction,
+  localDayKey,
+  type LightingMode
+} from '@shared/lightingMode'
 import { eqIgnoreCase } from '@shared/utils'
 import { ConfigStore, type ConfigChange } from './config/store'
 import { SecretVault } from './config/secrets'
+import { ModeStateStore, type ModeState } from './config/modeState'
 import { Compositor } from './core/compositor/compositor'
 import { Scheduler } from './core/compositor/scheduler'
 import { EventBus } from './core/eventBus'
@@ -17,7 +25,7 @@ import { SimulatorRegistry } from './core/simulators'
 import { getLogger } from './logging'
 import { OutputManager } from './outputs/manager'
 import { MqttAdapter } from './sources/mqtt/adapter'
-import { parseMqttCommand } from './sources/mqtt/commands'
+import { commandGateRequest, parseMqttCommand } from './sources/mqtt/commands'
 import { StatusPublisher } from './sources/mqtt/publisher'
 import { ThoriumAdapter } from './sources/thorium/adapter'
 
@@ -63,6 +71,12 @@ export class Services extends EventEmitter {
   private snapshotDebounce: ReturnType<typeof setTimeout> | null = null
   private lastSnapshotJson = ''
   private alertOverrides = new Map<string, string>()
+  private modeStore: ModeStateStore
+  private modeState: ModeState
+  private heldBack: { count: number; last: { ts: number; text: string } | null } = {
+    count: 0,
+    last: null
+  }
   private powerBlockerId: number | null = null
   private startedAt = Date.now()
   private publishTimer: ReturnType<typeof setTimeout> | null = null
@@ -74,6 +88,8 @@ export class Services extends EventEmitter {
     super()
     this.store = new ConfigStore(userData)
     this.secrets = new SecretVault(userData)
+    this.modeStore = new ModeStateStore(userData)
+    this.modeState = this.modeStore.create('normal')
     this.log = new EventLog(2000, (batch) => this.emit('events', batch))
     this.runner = new ActionRunner({
       compositor: this.compositor,
@@ -88,7 +104,10 @@ export class Services extends EventEmitter {
       },
       warn: (m) => this.toast('warn', m)
     })
-    this.engine = new RulesEngine(this.runner)
+    this.engine = new RulesEngine(this.runner, {
+      mode: () => this.modeState.mode,
+      onHeldBack: (text) => this.recordHeldBack(text)
+    })
     this.scheduler = new Scheduler(
       (now) => this.tick(now),
       40,
@@ -105,6 +124,18 @@ export class Services extends EventEmitter {
   async init(): Promise<void> {
     await this.store.load()
     await this.secrets.load()
+    // Before any source starts: a restart mid-mission must not fire a burst of effects.
+    const mode = await this.modeStore.load()
+    this.modeState = mode.state
+    if (mode.restored)
+      this.toast(
+        'warn',
+        `Restarted in ${LIGHTING_MODE_INFO[mode.state.mode].label} mode (set earlier today)`
+      )
+    else if (mode.expired)
+      log.info(
+        `lighting mode ${mode.expired.mode} was set on ${mode.expired.day}; starting the new day in Normal`
+      )
     if (this.store.loadError)
       this.toast(
         'error',
@@ -328,7 +359,14 @@ export class Services extends EventEmitter {
       unresolvedMappings: Object.fromEntries(
         this.engine.unresolved().map((u) => [u.mappingId, { reason: u.reason, fatal: u.fatal }])
       ),
-      alertOverrides: overrides
+      alertOverrides: overrides,
+      lightingMode: {
+        mode: this.modeState.mode,
+        since: this.modeState.since,
+        staleDay:
+          this.modeState.mode !== 'normal' && this.modeState.day !== localDayKey(Date.now()),
+        heldBack: { count: this.heldBack.count, last: this.heldBack.last }
+      }
     }
   }
 
@@ -387,6 +425,7 @@ export class Services extends EventEmitter {
     this.runner.activateScene(scene, targets, { layerId: layerId ?? null, origin: { ui: true } })
     this.bus.emit({
       source: 'ui',
+      staffOrigin: true,
       type: 'ui.action',
       name: 'scene.activate',
       simulatorName: simulatorName ?? undefined,
@@ -403,6 +442,7 @@ export class Services extends EventEmitter {
     )
     this.bus.emit({
       source: 'ui',
+      staffOrigin: true,
       type: 'ui.action',
       name: 'scene.release',
       simulatorName: simulatorName ?? undefined,
@@ -412,21 +452,43 @@ export class Services extends EventEmitter {
 
   setBlackout(on: boolean, source: 'ui' | 'mqtt' = 'ui'): void {
     this.compositor.setBlackout(on)
-    this.bus.emit({ source, type: 'ui.action', name: 'blackout', data: { on } })
+    this.bus.emit({
+      source,
+      staffOrigin: source === 'ui',
+      type: 'ui.action',
+      name: 'blackout',
+      data: { on }
+    })
   }
 
   releaseAll(source: 'ui' | 'mqtt' = 'ui'): void {
     this.compositor.releaseAll()
-    this.bus.emit({ source, type: 'ui.action', name: 'releaseAll', data: {} })
+    this.bus.emit({
+      source,
+      staffOrigin: source === 'ui',
+      type: 'ui.action',
+      name: 'releaseAll',
+      data: {}
+    })
   }
 
-  setGrandMaster(v: number): void {
+  setGrandMaster(v: number, source: 'ui' | 'mqtt' = 'ui'): void {
     this.compositor.setGrandMaster(v)
     void this.store.patchActiveProfile({ grandMaster: this.compositor.getGrandMaster() }, true)
-    this.bus.emit({ source: 'ui', type: 'ui.action', name: 'grandMaster', data: { value: v } })
+    this.bus.emit({
+      source,
+      staffOrigin: source === 'ui',
+      type: 'ui.action',
+      name: 'grandMaster',
+      data: { value: v }
+    })
   }
 
-  setAlertOverride(simulatorName: string, level: string | null): void {
+  setAlertOverride(
+    simulatorName: string,
+    level: string | null,
+    source: 'ui' | 'mqtt' = 'ui'
+  ): void {
     const sim = this.registry.thoriumSimulatorByName(simulatorName)
     if (level) this.alertOverrides.set(simulatorName, level)
     else this.alertOverrides.delete(simulatorName)
@@ -435,34 +497,109 @@ export class Services extends EventEmitter {
     // latches the Alert 5 scene with no way to clear it.
     const effective = level ?? sim?.alertLevel ?? null
     if (effective != null) {
-      this.bus.emit({
-        source: 'ui',
-        type: 'thorium.state',
-        name: 'alertLevel.changed',
-        simulatorId: sim?.id,
-        simulatorName,
-        data: {
-          level: effective,
-          rawLevel: effective,
-          training: false,
-          previous: null,
-          initial: false,
-          override: level != null,
-          simulatorName
-        }
-      })
+      this.reassertAlertLevel(simulatorName, effective, level != null, source)
     } else {
       log.warn(
         `alert override cleared for "${simulatorName}" but its current level is unknown; not re-asserting a level`
       )
     }
     this.bus.emit({
-      source: 'ui',
+      source,
+      staffOrigin: source === 'ui',
       type: 'ui.action',
       name: 'alertOverride',
       simulatorName,
       data: { level, simulatorName }
     })
+    this.scheduleSnapshot()
+  }
+
+  /** Emit a synthetic alert change so alert mappings re-apply `level` for one simulator. */
+  private reassertAlertLevel(
+    simulatorName: string,
+    level: string,
+    override: boolean,
+    source: 'ui' | 'mqtt'
+  ): void {
+    const sim = this.registry.thoriumSimulatorByName(simulatorName)
+    this.bus.emit({
+      source,
+      staffOrigin: source === 'ui',
+      type: 'thorium.state',
+      name: 'alertLevel.changed',
+      simulatorId: sim?.id,
+      simulatorName,
+      data: {
+        level,
+        rawLevel: level,
+        training: false,
+        previous: null,
+        initial: false,
+        override,
+        simulatorName
+      }
+    })
+  }
+
+  // ------------------------------------------------------------------ lighting mode
+
+  lightingMode(): LightingMode {
+    return this.modeState.mode
+  }
+
+  async setLightingMode(
+    mode: LightingMode,
+    opts: { releaseUncleared?: boolean; catchUpAlerts?: boolean } = {},
+    by: 'ui' | 'tray' = 'ui'
+  ): Promise<void> {
+    const previous = this.modeState.mode
+    if (mode === previous) return
+    this.modeState = this.modeStore.create(mode)
+    this.heldBack = { count: 0, last: null }
+    let released = 0
+    if (mode === 'reduced' && opts.releaseUncleared) {
+      const cleared = new Set(
+        this.store
+          .active()
+          .scenes.filter((s) => s.reducedEffectsCleared)
+          .map((s) => s.id)
+      )
+      released = this.compositor.release((i) => !i.origin.test && !cleared.has(i.sceneId))
+    }
+    log.info(`lighting mode ${previous} → ${mode} (by ${by})`)
+    this.bus.emit({
+      source: 'ui',
+      staffOrigin: true,
+      type: 'ui.action',
+      name: 'lightingMode',
+      data: { mode, previous, by }
+    })
+    if (opts.catchUpAlerts && LIGHTING_MODE_RANK[mode] < LIGHTING_MODE_RANK[previous]) {
+      for (const sim of this.registry.inScope()) {
+        const override = this.alertOverrides.get(sim.name)
+        const level = override ?? sim.alertLevel
+        if (level != null) this.reassertAlertLevel(sim.name, level, override != null, 'ui')
+      }
+    }
+    this.toast(
+      mode === 'normal' ? 'info' : 'warn',
+      mode === 'normal'
+        ? 'Back to Normal lighting'
+        : `${LIGHTING_MODE_INFO[mode].label} on${released ? ` — turned off ${released} scene${released === 1 ? '' : 's'}` : ''}`
+    )
+    this.scheduleSnapshot()
+    await this.modeStore.save(this.modeState)
+  }
+
+  /** Confirm a restrictive mode set on an earlier day is still wanted today. */
+  async keepLightingModeForToday(): Promise<void> {
+    this.modeState = { ...this.modeState, day: localDayKey(Date.now()) }
+    this.scheduleSnapshot()
+    await this.modeStore.save(this.modeState)
+  }
+
+  private recordHeldBack(text: string): void {
+    this.heldBack = { count: this.heldBack.count + 1, last: { ts: Date.now(), text } }
     this.scheduleSnapshot()
   }
 
@@ -473,6 +610,21 @@ export class Services extends EventEmitter {
       return
     }
     const cmd = r.cmd
+    const heldBack = gateAction(
+      this.modeState.mode,
+      commandGateRequest(cmd, (n) => this.runner.sceneByName(n)),
+      { staffOrigin: false }
+    )
+    if (heldBack) {
+      this.recordHeldBack(`MQTT ${cmd.action} — ${heldBack}`)
+      this.bus.emit({
+        source: 'mqtt',
+        type: 'system',
+        name: 'lightingMode.heldBack',
+        data: { command: cmd.action, reason: heldBack, topic }
+      })
+      return
+    }
     switch (cmd.action) {
       case 'activateScene': {
         const scene = this.runner.sceneByName(cmd.scene)
@@ -510,7 +662,7 @@ export class Services extends EventEmitter {
         this.setBlackout(cmd.on, 'mqtt')
         return
       case 'grandMaster':
-        this.setGrandMaster(cmd.value)
+        this.setGrandMaster(cmd.value, 'mqtt')
         return
       case 'setChannel': {
         const key = `${cmd.universe}:${cmd.channel}`
@@ -530,7 +682,7 @@ export class Services extends EventEmitter {
         return
       }
       case 'alertLevel':
-        this.setAlertOverride(cmd.simulator, cmd.level)
+        this.setAlertOverride(cmd.simulator, cmd.level, 'mqtt')
         return
     }
   }
@@ -575,9 +727,10 @@ export class Services extends EventEmitter {
         data: ev.data
       },
       matched: matched.map((m) => ({
-        mappingId: m.id,
-        mappingName: m.name,
-        actions: m.actions.map((a) => this.runner.describe(a))
+        mappingId: m.mapping.id,
+        mappingName: m.mapping.name,
+        actions: m.allowed.map((a) => this.runner.describe(a)),
+        ...(m.heldBack.length ? { heldBack: m.heldBack } : {})
       })),
       frames: [],
       live
@@ -597,7 +750,7 @@ export class Services extends EventEmitter {
     } else {
       // Predict channel writes without touching the compositor.
       for (const m of matched) {
-        for (const a of m.actions) {
+        for (const a of m.allowed) {
           if (a.kind !== 'activateScene') continue
           const scene = this.runner.sceneById(a.sceneId)
           if (!scene) continue

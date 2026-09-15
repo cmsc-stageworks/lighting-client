@@ -129,8 +129,8 @@ export class ActionRunner {
     for (const t of targets) this.deps.compositor.releaseScene(scene.id, t.key)
   }
 
-  async run(mapping: Mapping, event: AppEvent): Promise<void> {
-    for (const action of mapping.actions) {
+  async run(mapping: Mapping, event: AppEvent, actions = mapping.actions): Promise<void> {
+    for (const action of actions) {
       try {
         await this.runOne(action, event, mapping)
       } catch (err) {
