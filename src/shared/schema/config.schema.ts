@@ -3,7 +3,9 @@ import {
   CONFIG_SCHEMA_VERSION,
   DMX_CHANNELS,
   LEVEL_CURVES,
+  LEVEL_HOLD_UNITS,
   MAX_FPS,
+  MAX_HOLD_MS,
   SACN_MAX_UNIVERSE
 } from '../constants'
 
@@ -308,6 +310,26 @@ export const LevelFadeSchema = z.discriminatedUnion('kind', [
 ])
 export type LevelFade = z.infer<typeof LevelFadeSchema>
 
+/** How long a `holdLevel` action keeps its channels up before letting them go. */
+export const LevelHoldSchema = z.discriminatedUnion('kind', [
+  /**
+   * Take the hold from the event. Thorium publishes durations in wildly
+   * different units depending on the field (`duration` on a lighting action is
+   * ms, a timer is seconds), so the unit is part of the config.
+   */
+  z.object({
+    kind: z.literal('fromEvent'),
+    path: z.string().trim().min(1).default('duration'),
+    units: z.enum(LEVEL_HOLD_UNITS).default('ms'),
+    /** Used when the event carries no number there. */
+    fallbackMs: z.number().int().min(0).max(MAX_HOLD_MS).default(0)
+  }),
+  z.object({ kind: z.literal('fixed'), ms: z.number().int().min(0).max(MAX_HOLD_MS) }),
+  /** Stay up until something releases it (a release action, layer or scope change). */
+  z.object({ kind: z.literal('latch') })
+])
+export type LevelHold = z.infer<typeof LevelHoldSchema>
+
 export const ActionSchema = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('activateScene'),
@@ -349,6 +371,41 @@ export const ActionSchema = z.discriminatedUnion('kind', [
     channels: z.array(z.number().int().min(0).max(DMX_CHANNELS)).min(1),
     source: LevelSourceSchema.prefault({}),
     fade: LevelFadeSchema.prefault({ kind: 'fromEvent' }),
+    layerId: id.nullable().default(null),
+    /** Shown on the Dashboard instead of a scene name. */
+    label: z.string().trim().max(60).default('')
+  }),
+  /**
+   * The mirror of `setLevel`: the *duration* comes off the event and the value
+   * is set here. Thorium events that carry a length (a lighting action's
+   * `duration`, a timer) become "hold these channels at this value for that
+   * long, then fall back (optionally) and release".
+   */
+  z.object({
+    kind: z.literal('holdLevel'),
+    target: ActionTargetSchema.default('event'),
+    addressing: z.enum(['absolute', 'relative']).default('relative'),
+    /** Absolute addressing only; relative uses the simulator profile's universe. */
+    universe: universe.optional(),
+    /** Absolute channels, or offsets from the profile's baseAddress when relative. */
+    channels: z.array(z.number().int().min(0).max(DMX_CHANNELS)).min(1),
+    /** The 0–255 value to hold. Fixed here — the event only supplies the time. */
+    value: dmxValue.default(255),
+    hold: LevelHoldSchema.prefault({ kind: 'fromEvent' }),
+    /**
+     * Where the channels go when that hold ends, instead of releasing: a second
+     * value held for its own time (`latch` leaves it up for staff to release).
+     * Null releases straight away.
+     */
+    fallback: z
+      .object({
+        value: dmxValue.default(0),
+        hold: LevelHoldSchema.prefault({ kind: 'fixed', ms: 1000 })
+      })
+      .nullable()
+      .default(null),
+    /** Ramp used both on the way up and on release. */
+    fade: LevelFadeSchema.prefault({ kind: 'none' }),
     layerId: id.nullable().default(null),
     /** Shown on the Dashboard instead of a scene name. */
     label: z.string().trim().max(60).default('')

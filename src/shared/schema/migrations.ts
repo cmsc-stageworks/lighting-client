@@ -98,6 +98,16 @@ export const migrations: Migration[] = [
     up(raw) {
       return { ...raw, schemaVersion: 6 }
     }
+  },
+  {
+    // v7: the `holdLevel` action (a value you set, held for a time off the
+    // event). Additive like v6, so the bump only stops an older build from
+    // silently dropping these actions on its next save.
+    from: 6,
+    to: 7,
+    up(raw) {
+      return { ...raw, schemaVersion: 7 }
+    }
   }
 ]
 

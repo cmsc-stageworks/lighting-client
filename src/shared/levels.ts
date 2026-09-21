@@ -1,4 +1,5 @@
-import type { LevelFade, LevelSource } from './schema/config.schema'
+import type { LevelFade, LevelHold, LevelSource } from './schema/config.schema'
+import { MAX_HOLD_MS } from './constants'
 import { clamp, resolvePath } from './utils'
 
 /**
@@ -38,4 +39,18 @@ export function resolveFadeMs(fade: LevelFade, data: unknown): number {
   if (fade.kind === 'fixed') return fade.ms
   const n = readLevelInput(data, fade.path)
   return n != null && n >= 0 ? Math.min(Math.round(n), 600_000) : fade.fallbackMs
+}
+
+/**
+ * How long a held level stays up. `fromEvent` is the point of the `holdLevel`
+ * action: the event says *how long*, the action says *what value*. Returns null
+ * for a latch, which is "until something releases it".
+ */
+export function resolveHoldMs(hold: LevelHold, data: unknown): number | null {
+  if (hold.kind === 'latch') return null
+  if (hold.kind === 'fixed') return hold.ms
+  const n = readLevelInput(data, hold.path)
+  // A negative duration is as meaningless as a missing one, so both fall back.
+  const ms = n != null && n >= 0 ? n * (hold.units === 'seconds' ? 1000 : 1) : hold.fallbackMs
+  return clamp(Math.round(ms), 0, MAX_HOLD_MS)
 }

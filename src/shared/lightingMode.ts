@@ -46,6 +46,7 @@ export type GateKind =
   | 'grandMaster'
   | 'setChannel'
   | 'setLevel'
+  | 'holdLevel'
   | 'alertLevel'
   | 'publishMqtt'
   | 'thoriumMutation'
@@ -72,7 +73,11 @@ const GLOBAL_LABEL: Partial<Record<GateKind, string>> = {
   blackout: 'Blackout',
   grandMaster: 'Grand Master',
   setChannel: 'Raw channel control',
-  setLevel: 'Channel level'
+  setLevel: 'Channel level',
+  // Deliberately *not* in REDUCED_ALLOWED: a `holdLevel` picks its own value and
+  // drops it again after the hold, so a short one is a flash — the effect
+  // Reduced Effects exists to hold back.
+  holdLevel: 'Timed channel hold'
 }
 
 /**

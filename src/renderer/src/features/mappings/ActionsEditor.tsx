@@ -1,7 +1,7 @@
 import React from 'react'
 import { ArrowDown, ArrowUp, Plus, ShieldOff, Trash2 } from 'lucide-react'
-import type { Action, ActionTarget } from '@shared/types/config'
-import { DMX_CHANNELS, LAYER_IDS, LEVEL_CURVES } from '@shared/constants'
+import type { Action, ActionTarget, LevelFade, LevelHold } from '@shared/types/config'
+import { DMX_CHANNELS, LAYER_IDS, LEVEL_CURVES, LEVEL_HOLD_UNITS } from '@shared/constants'
 import { gateAction, gateRequestForAction } from '@shared/lightingMode'
 import { scaleLevel } from '@shared/levels'
 import { useConfig } from '../../store/config'
@@ -15,6 +15,7 @@ const KIND_LABELS: Record<Action['kind'], string> = {
   releaseAll: 'Release all scenes',
   blackout: 'Blackout',
   setLevel: 'Set channel level',
+  holdLevel: 'Hold channel at a value',
   publishMqtt: 'Publish MQTT message',
   thoriumMutation: 'Send to Thorium'
 }
@@ -47,6 +48,19 @@ function defaultAction(kind: Action['kind'], firstSceneId: string, firstLayerId:
           invert: false
         },
         fade: { kind: 'fromEvent', path: 'transitionDuration', fallbackMs: 0 },
+        layerId: null,
+        label: ''
+      }
+    case 'holdLevel':
+      return {
+        kind,
+        target: 'event',
+        addressing: 'relative',
+        channels: [0],
+        value: 255,
+        hold: { kind: 'fromEvent', path: 'duration', units: 'ms', fallbackMs: 1000 },
+        fallback: null,
+        fade: { kind: 'none' },
         layerId: null,
         label: ''
       }
@@ -117,6 +131,189 @@ function ChannelList({
       }}
       onBlur={() => setText(value.join(', '))}
     />
+  )
+}
+
+type LevelAction = Extract<Action, { kind: 'setLevel' | 'holdLevel' }>
+
+/** Addressing, target/universe and channels — identical for both level actions. */
+function LevelAddressFields({
+  a,
+  onChange
+}: {
+  a: LevelAction
+  onChange: (a: LevelAction) => void
+}): React.JSX.Element {
+  return (
+    <>
+      <Field label="Addressing">
+        <Select
+          value={a.addressing}
+          onChange={(v) => onChange({ ...a, addressing: v as 'relative' | 'absolute' })}
+          options={[
+            { value: 'relative', label: "Relative to the simulator's base address" },
+            { value: 'absolute', label: 'Absolute universe / channel' }
+          ]}
+        />
+      </Field>
+      {a.addressing === 'relative' ? (
+        <Field label="For">
+          <TargetSelect value={a.target} onChange={(t) => onChange({ ...a, target: t })} />
+        </Field>
+      ) : (
+        <Field label="Universe">
+          <NumberInput
+            value={a.universe ?? 1}
+            min={1}
+            onChange={(v) => onChange({ ...a, universe: v })}
+          />
+        </Field>
+      )}
+      <Field
+        label="Channels"
+        hint={
+          a.addressing === 'relative'
+            ? 'Offsets from the base address, comma separated'
+            : 'Absolute channels, comma separated'
+        }
+      >
+        <ChannelList
+          value={a.channels}
+          relative={a.addressing === 'relative'}
+          onChange={(v) => onChange({ ...a, channels: v })}
+        />
+      </Field>
+    </>
+  )
+}
+
+/** Fade picker shared by both level actions. */
+function FadeFields({
+  fade,
+  onChange,
+  label = 'Fade'
+}: {
+  fade: LevelFade
+  onChange: (f: LevelFade) => void
+  label?: string
+}): React.JSX.Element {
+  return (
+    <>
+      <Field label={label}>
+        <Select
+          value={fade.kind}
+          onChange={(v) =>
+            onChange(
+              v === 'none'
+                ? { kind: 'none' }
+                : v === 'fixed'
+                  ? { kind: 'fixed', ms: 500 }
+                  : { kind: 'fromEvent', path: 'transitionDuration', fallbackMs: 0 }
+            )
+          }
+          options={[
+            { value: 'fromEvent', label: "Follow Thorium's transition duration" },
+            { value: 'fixed', label: 'Fixed time' },
+            { value: 'none', label: 'Snap (no fade)' }
+          ]}
+        />
+      </Field>
+      {fade.kind === 'fixed' && (
+        <Field label="Fade (ms)">
+          <NumberInput
+            value={fade.ms}
+            min={0}
+            onChange={(v) => onChange({ kind: 'fixed', ms: v })}
+          />
+        </Field>
+      )}
+      {fade.kind === 'fromEvent' && (
+        <Field label="Fallback fade (ms)" hint="Used when the event carries no duration">
+          <NumberInput
+            value={fade.fallbackMs}
+            min={0}
+            onChange={(v) =>
+              onChange({ kind: 'fromEvent', path: 'transitionDuration', fallbackMs: v })
+            }
+          />
+        </Field>
+      )}
+    </>
+  )
+}
+
+/** How long a `holdLevel` keeps its channels up. */
+function HoldFields({
+  hold,
+  onChange,
+  label = 'Hold for',
+  hint = 'Hold starts once the fade in finishes'
+}: {
+  hold: LevelHold
+  onChange: (h: LevelHold) => void
+  label?: string
+  hint?: string
+}): React.JSX.Element {
+  return (
+    <>
+      <Field label={label} hint={hint}>
+        <Select
+          value={hold.kind}
+          onChange={(v) =>
+            onChange(
+              v === 'latch'
+                ? { kind: 'latch' }
+                : v === 'fixed'
+                  ? { kind: 'fixed', ms: 1000 }
+                  : { kind: 'fromEvent', path: 'duration', units: 'ms', fallbackMs: 1000 }
+            )
+          }
+          options={[
+            { value: 'fromEvent', label: 'A duration on the event' },
+            { value: 'fixed', label: 'Fixed time' },
+            { value: 'latch', label: 'Until released' }
+          ]}
+        />
+      </Field>
+      {hold.kind === 'fixed' && (
+        <Field label={`${label} (ms)`}>
+          <NumberInput
+            value={hold.ms}
+            min={0}
+            onChange={(v) => onChange({ kind: 'fixed', ms: v })}
+          />
+        </Field>
+      )}
+      {hold.kind === 'fromEvent' && (
+        <>
+          <Field label="Duration from" hint="Path on the event — e.g. duration">
+            <Input
+              value={hold.path}
+              className="mono"
+              placeholder="duration"
+              onChange={(e) => onChange({ ...hold, path: e.target.value })}
+            />
+          </Field>
+          <Field label="In">
+            <Select
+              value={hold.units}
+              onChange={(v) => onChange({ ...hold, units: v as (typeof LEVEL_HOLD_UNITS)[number] })}
+              options={[
+                { value: 'ms', label: 'Milliseconds' },
+                { value: 'seconds', label: 'Seconds' }
+              ]}
+            />
+          </Field>
+          <Field label="Fallback hold (ms)" hint="Used when the event carries no duration">
+            <NumberInput
+              value={hold.fallbackMs}
+              min={0}
+              onChange={(v) => onChange({ ...hold, fallbackMs: v })}
+            />
+          </Field>
+        </>
+      )}
+    </>
   )
 }
 
@@ -273,46 +470,7 @@ export function ActionsEditor({
             )}
             {a.kind === 'setLevel' && (
               <>
-                <Field label="Addressing">
-                  <Select
-                    value={a.addressing}
-                    onChange={(v) => setAt(i, { ...a, addressing: v as 'relative' | 'absolute' })}
-                    options={[
-                      { value: 'relative', label: "Relative to the simulator's base address" },
-                      { value: 'absolute', label: 'Absolute universe / channel' }
-                    ]}
-                  />
-                </Field>
-                {a.addressing === 'relative' ? (
-                  <Field label="For">
-                    <TargetSelect
-                      value={a.target}
-                      onChange={(t) => setAt(i, { ...a, target: t })}
-                    />
-                  </Field>
-                ) : (
-                  <Field label="Universe">
-                    <NumberInput
-                      value={a.universe ?? 1}
-                      min={1}
-                      onChange={(v) => setAt(i, { ...a, universe: v })}
-                    />
-                  </Field>
-                )}
-                <Field
-                  label="Channels"
-                  hint={
-                    a.addressing === 'relative'
-                      ? 'Offsets from the base address, comma separated'
-                      : 'Absolute channels, comma separated'
-                  }
-                >
-                  <ChannelList
-                    value={a.channels}
-                    relative={a.addressing === 'relative'}
-                    onChange={(v) => setAt(i, { ...a, channels: v })}
-                  />
-                </Field>
+                <LevelAddressFields a={a} onChange={(next) => setAt(i, next)} />
                 <Field label="Value from" hint="Path on the event — Thorium intensity is 0–1">
                   <Input
                     value={a.source.path}
@@ -378,50 +536,7 @@ export function ActionsEditor({
                     options={layers.map((l) => ({ value: l.id, label: l.name }))}
                   />
                 </Field>
-                <Field label="Fade">
-                  <Select
-                    value={a.fade.kind}
-                    onChange={(v) =>
-                      setAt(i, {
-                        ...a,
-                        fade:
-                          v === 'none'
-                            ? { kind: 'none' }
-                            : v === 'fixed'
-                              ? { kind: 'fixed', ms: 500 }
-                              : { kind: 'fromEvent', path: 'transitionDuration', fallbackMs: 0 }
-                      })
-                    }
-                    options={[
-                      { value: 'fromEvent', label: "Follow Thorium's transition duration" },
-                      { value: 'fixed', label: 'Fixed time' },
-                      { value: 'none', label: 'Snap (no fade)' }
-                    ]}
-                  />
-                </Field>
-                {a.fade.kind === 'fixed' && (
-                  <Field label="Fade (ms)">
-                    <NumberInput
-                      value={a.fade.ms}
-                      min={0}
-                      onChange={(v) => setAt(i, { ...a, fade: { kind: 'fixed', ms: v } })}
-                    />
-                  </Field>
-                )}
-                {a.fade.kind === 'fromEvent' && (
-                  <Field label="Fallback fade (ms)" hint="Used when the event carries no duration">
-                    <NumberInput
-                      value={a.fade.fallbackMs}
-                      min={0}
-                      onChange={(v) =>
-                        setAt(i, {
-                          ...a,
-                          fade: { kind: 'fromEvent', path: 'transitionDuration', fallbackMs: v }
-                        })
-                      }
-                    />
-                  </Field>
-                )}
+                <FadeFields fade={a.fade} onChange={(f) => setAt(i, { ...a, fade: f })} />
                 <Field label="Label" hint="Shown on the Dashboard while this level is live">
                   <Input
                     value={a.label}
@@ -434,6 +549,86 @@ export function ActionsEditor({
                     .map((x) => `${x} → ${scaleLevel(x, a.source)}`)
                     .join('   ·   ')}
                 </div>
+              </>
+            )}
+            {a.kind === 'holdLevel' && (
+              <>
+                <LevelAddressFields a={a} onChange={(next) => setAt(i, next)} />
+                <Field label="Value" hint="0–255, held for as long as the event says">
+                  <NumberInput
+                    value={a.value}
+                    min={0}
+                    max={255}
+                    onChange={(v) => setAt(i, { ...a, value: v })}
+                  />
+                </Field>
+                <HoldFields
+                  hold={a.hold}
+                  onChange={(h) =>
+                    setAt(i, {
+                      ...a,
+                      hold: h,
+                      // A latch never ends on its own, so there is nothing for a
+                      // fallback stage to follow.
+                      fallback: h.kind === 'latch' ? null : a.fallback
+                    })
+                  }
+                />
+                {a.hold.kind !== 'latch' && (
+                  <Field label="When the hold ends">
+                    <Select
+                      value={a.fallback ? 'fallback' : 'release'}
+                      onChange={(v) =>
+                        setAt(i, {
+                          ...a,
+                          fallback:
+                            v === 'release' ? null : { value: 0, hold: { kind: 'fixed', ms: 1000 } }
+                        })
+                      }
+                      options={[
+                        { value: 'release', label: 'Release the channels' },
+                        { value: 'fallback', label: 'Go to another value first' }
+                      ]}
+                    />
+                  </Field>
+                )}
+                {a.fallback && (
+                  <>
+                    <Field label="Then value" hint="0–255, held before the release">
+                      <NumberInput
+                        value={a.fallback.value}
+                        min={0}
+                        max={255}
+                        onChange={(v) => setAt(i, { ...a, fallback: { ...a.fallback!, value: v } })}
+                      />
+                    </Field>
+                    <HoldFields
+                      hold={a.fallback.hold}
+                      onChange={(h) => setAt(i, { ...a, fallback: { ...a.fallback!, hold: h } })}
+                      label="Then hold for"
+                      hint="Then the channels release"
+                    />
+                  </>
+                )}
+                <Field label="Layer">
+                  <Select
+                    value={a.layerId ?? LAYER_IDS.scene}
+                    onChange={(v) => setAt(i, { ...a, layerId: v })}
+                    options={layers.map((l) => ({ value: l.id, label: l.name }))}
+                  />
+                </Field>
+                <FadeFields
+                  fade={a.fade}
+                  onChange={(f) => setAt(i, { ...a, fade: f })}
+                  label="Fade in / out"
+                />
+                <Field label="Label" hint="Shown on the Dashboard while this level is live">
+                  <Input
+                    value={a.label}
+                    placeholder="Damage flash"
+                    onChange={(e) => setAt(i, { ...a, label: e.target.value })}
+                  />
+                </Field>
               </>
             )}
             {a.kind === 'publishMqtt' && (

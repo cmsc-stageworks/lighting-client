@@ -1,4 +1,4 @@
-export const CONFIG_SCHEMA_VERSION = 6
+export const CONFIG_SCHEMA_VERSION = 7
 
 export const DMX_CHANNELS = 512
 export const DMX_MAX_VALUE = 255
@@ -49,6 +49,12 @@ export const LIGHTING_ACTIONS = [
 
 /** Response curves for the `setLevel` action's value mapping. */
 export const LEVEL_CURVES = ['linear', 'square', 'sqrt'] as const
+
+/** Units a `holdLevel` action reads its hold time in, before it becomes ms. */
+export const LEVEL_HOLD_UNITS = ['ms', 'seconds'] as const
+
+/** Longest a level may hold before it is released, matching a timed scene. */
+export const MAX_HOLD_MS = 3_600_000
 
 export const THORIUM_TRIGGER_ACTIONS = [
   'flash',

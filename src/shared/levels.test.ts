@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { LevelSource } from './schema/config.schema'
-import { readLevelInput, resolveFadeMs, scaleLevel } from './levels'
+import { readLevelInput, resolveFadeMs, scaleLevel, resolveHoldMs } from './levels'
 
 const src = (over: Partial<LevelSource> = {}): LevelSource => ({
   path: 'intensity',
@@ -69,5 +69,32 @@ describe('resolveFadeMs', () => {
   it('handles fixed and snap', () => {
     expect(resolveFadeMs({ kind: 'fixed', ms: 800 }, {})).toBe(800)
     expect(resolveFadeMs({ kind: 'none' }, { transitionDuration: 5000 })).toBe(0)
+  })
+})
+
+describe('resolveHoldMs', () => {
+  const hold = { kind: 'fromEvent', path: 'duration', units: 'ms', fallbackMs: 750 } as const
+
+  it('takes the hold from the event', () => {
+    expect(resolveHoldMs(hold, { duration: 4000 })).toBe(4000)
+  })
+
+  it('converts seconds, which is how Thorium times most things', () => {
+    expect(resolveHoldMs({ ...hold, units: 'seconds' }, { duration: 2.5 })).toBe(2500)
+  })
+
+  it('falls back when the event has no usable duration', () => {
+    expect(resolveHoldMs(hold, {})).toBe(750)
+    expect(resolveHoldMs(hold, { duration: null })).toBe(750)
+    expect(resolveHoldMs(hold, { duration: -5 })).toBe(750)
+  })
+
+  it('clamps a runaway duration to an hour', () => {
+    expect(resolveHoldMs({ ...hold, units: 'seconds' }, { duration: 99999 })).toBe(3_600_000)
+  })
+
+  it('handles fixed and latch', () => {
+    expect(resolveHoldMs({ kind: 'fixed', ms: 300 }, { duration: 4000 })).toBe(300)
+    expect(resolveHoldMs({ kind: 'latch' }, { duration: 4000 })).toBeNull()
   })
 })

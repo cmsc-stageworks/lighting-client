@@ -14,7 +14,7 @@ describe('config schema + migrations', () => {
   it('migrates a version-less document', () => {
     const { migrated, applied } = migrateConfig({ settings: {} })
     expect(migrated.schemaVersion).toBe(CONFIG_SCHEMA_VERSION)
-    expect(applied).toEqual([1, 2, 3, 4, 5, 6])
+    expect(applied).toEqual([1, 2, 3, 4, 5, 6, 7])
   })
   it('v2 → v4 keeps flat conditions and hoists the simulator restriction', () => {
     const v2 = {
@@ -35,7 +35,7 @@ describe('config schema + migrations', () => {
       ]
     }
     const { migrated, applied } = migrateConfig(v2)
-    expect(applied).toEqual([3, 4, 5, 6])
+    expect(applied).toEqual([3, 4, 5, 6, 7])
     const ms = (migrated.profiles as { mappings: Record<string, unknown>[] }[])[0].mappings
     expect(ms[0].trigger).toBeUndefined()
     expect(ms[0].simulatorNames).toEqual(['Magellan'])

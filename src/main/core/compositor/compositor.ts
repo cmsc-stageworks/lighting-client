@@ -32,6 +32,12 @@ export interface ActiveInstance extends EnvelopeState {
   valueFadeMs: number
   /** The 0–255 level a `setLevel` instance is heading to (for the Dashboard). */
   levelValue: number | null
+  /**
+   * What a level does when its hold runs out instead of releasing: move to this
+   * value and hold *that* (the `holdLevel` action's fallback stage). Cleared
+   * once it has been applied, so a level only steps down once per firing.
+   */
+  nextStage: LevelStage | null
   origin: { mappingId?: string; eventId?: string; ui?: boolean; test?: boolean }
 }
 
@@ -49,6 +55,14 @@ function instanceValue(i: ActiveInstance, universe: number, ch: number, now: num
   if (t >= 1) return target
   const from = i.fromFrames?.get(universe)?.[ch] ?? 0
   return from + (target - from) * t
+}
+
+/** A follow-on value for a held level: move here when the hold ends, then hold. */
+export interface LevelStage {
+  value: number
+  /** Null holds the new value until something releases it. */
+  holdMs: number | null
+  fadeMs: number
 }
 
 export interface ResolvedFrame {
@@ -231,6 +245,7 @@ export class Compositor extends EventEmitter {
       valueFadeStartedAt: now,
       valueFadeMs: 0,
       levelValue: null,
+      nextStage: null,
       origin: opts.origin ?? {}
     }
     this.instances.push(inst)
@@ -301,6 +316,14 @@ export class Compositor extends EventEmitter {
       value: number
       fadeMs: number
       label: string
+      /**
+       * Release the level automatically this long after the fade in settles
+       * (the `holdLevel` action). Null or absent means it stays until released,
+       * which is what a value follow wants.
+       */
+      holdMs?: number | null
+      /** Where to go when that hold ends, instead of releasing. */
+      nextStage?: LevelStage | null
       simulatorKey?: string | null
       simulatorName?: string | null
     }
@@ -312,6 +335,10 @@ export class Compositor extends EventEmitter {
     }
     const now = this.now()
     const value = clamp(Math.round(spec.value), 0, 255)
+    // Scenes start their hold once the fade in is done; a level's "fade in" is
+    // its value ramp, so the same rule puts the hold after `fadeMs`.
+    const holdUntil =
+      spec.holdMs != null ? now + Math.max(0, spec.fadeMs) + Math.max(0, spec.holdMs) : null
     const frames = new Map<number, Uint8Array>()
     const masks = new Map<number, Uint8Array>()
     const f = new Uint8Array(DMX_CHANNELS + 1)
@@ -333,15 +360,7 @@ export class Compositor extends EventEmitter {
       // Start the new fade from what this instance is actually outputting right
       // now — a change part-way through a fade continues from there, not from
       // the value the last change was aiming at.
-      const from = new Map<number, Uint8Array>()
-      for (const [u, arr] of existing.frames) {
-        const snapshot = new Uint8Array(DMX_CHANNELS + 1)
-        for (let ch = 1; ch <= DMX_CHANNELS; ch++)
-          if (arr[ch] || existing.masks.get(u)![ch])
-            snapshot[ch] = Math.round(instanceValue(existing, u, ch, now))
-        from.set(u, snapshot)
-        this.dirty.add(u)
-      }
+      const from = this.snapshotFrames(existing, now)
       existing.layerId = spec.layerId
       existing.sceneName = spec.label
       existing.simulatorName = spec.simulatorName ?? null
@@ -352,6 +371,11 @@ export class Compositor extends EventEmitter {
       existing.valueFadeMs = Math.max(0, spec.fadeMs)
       existing.fadeOutMs = Math.max(0, spec.fadeMs)
       existing.levelValue = value
+      // Re-firing the same action re-arms the hold from now, so a repeating
+      // event keeps the channels up rather than letting the first hold expire,
+      // and puts the fallback stage back in front of it.
+      existing.holdUntil = holdUntil
+      existing.nextStage = spec.nextStage ?? null
       // A level that was released and is being driven again comes back to life.
       existing.releaseStartedAt = null
       existing.releaseLevel = 1
@@ -373,7 +397,7 @@ export class Compositor extends EventEmitter {
       startLevel: 1,
       releaseStartedAt: null,
       releaseLevel: 1,
-      holdUntil: null,
+      holdUntil,
       frames,
       masks,
       levelKey: key,
@@ -382,12 +406,56 @@ export class Compositor extends EventEmitter {
       valueFadeStartedAt: now,
       valueFadeMs: Math.max(0, spec.fadeMs),
       levelValue: value,
+      nextStage: spec.nextStage ?? null,
       origin: {}
     }
     this.instances.push(inst)
     this.dirty.add(spec.universe)
     this.emit('change')
     return { instance: inst, warnings }
+  }
+
+  /**
+   * What an instance is outputting right this moment, per universe — the value
+   * a new fade has to start from so a change mid-fade never jumps.
+   */
+  private snapshotFrames(i: ActiveInstance, now: number): Map<number, Uint8Array> {
+    const from = new Map<number, Uint8Array>()
+    for (const [u, arr] of i.frames) {
+      const snapshot = new Uint8Array(DMX_CHANNELS + 1)
+      for (let ch = 1; ch <= DMX_CHANNELS; ch++)
+        if (arr[ch] || i.masks.get(u)![ch]) snapshot[ch] = Math.round(instanceValue(i, u, ch, now))
+      from.set(u, snapshot)
+      this.dirty.add(u)
+    }
+    return from
+  }
+
+  /**
+   * Move a held level to its follow-on value when the first hold runs out: same
+   * channels, same layer, new value, and a fresh hold (or none, which leaves it
+   * up until something releases it). Crossfades like any other level change.
+   */
+  private applyStage(i: ActiveInstance, stage: LevelStage, now: number): void {
+    const value = clamp(Math.round(stage.value), 0, 255)
+    const fadeMs = Math.max(0, stage.fadeMs)
+    const from = this.snapshotFrames(i, now)
+    const frames = new Map<number, Uint8Array>()
+    for (const [u, mask] of i.masks) {
+      const f = new Uint8Array(DMX_CHANNELS + 1)
+      for (let ch = 1; ch <= DMX_CHANNELS; ch++) if (mask[ch]) f[ch] = value
+      frames.set(u, f)
+    }
+    i.frames = frames
+    i.fromFrames = from
+    i.valueFadeStartedAt = now
+    i.valueFadeMs = fadeMs
+    i.fadeOutMs = fadeMs
+    i.levelValue = value
+    i.holdUntil = stage.holdMs != null ? now + fadeMs + Math.max(0, stage.holdMs) : null
+    // One step per firing: without this the same stage would re-apply every
+    // time its own hold expired.
+    i.nextStage = null
   }
 
   // ------------------------------------------------------------------ test layer
@@ -417,6 +485,7 @@ export class Compositor extends EventEmitter {
         valueFadeStartedAt: this.now(),
         valueFadeMs: 0,
         levelValue: null,
+        nextStage: null,
         origin: { test: true }
       }
       this.instances.push(this.testInstance)
@@ -456,9 +525,14 @@ export class Compositor extends EventEmitter {
     let changed = false
     for (const i of this.instances) {
       if (i.holdUntil != null && i.releaseStartedAt == null && now >= i.holdUntil) {
-        const lvl = envelopeLevel(i, now)
-        i.releaseLevel = lvl === DONE ? 0 : lvl
-        i.releaseStartedAt = now
+        if (i.nextStage) {
+          // A held level with a fallback steps down to it instead of releasing.
+          this.applyStage(i, i.nextStage, now)
+        } else {
+          const lvl = envelopeLevel(i, now)
+          i.releaseLevel = lvl === DONE ? 0 : lvl
+          i.releaseStartedAt = now
+        }
         changed = true
       }
       if (i.fromFrames && valueFadeT(i, now) >= 1) {

@@ -19,6 +19,7 @@ const kinds: GateKind[] = [
   'grandMaster',
   'setChannel',
   'setLevel',
+  'holdLevel',
   'alertLevel',
   'publishMqtt',
   'thoriumMutation'
@@ -48,6 +49,12 @@ describe('gateAction', () => {
       expect(gateAction('reduced', { kind }, auto)).toBeNull()
     for (const kind of ['blackout', 'grandMaster', 'setChannel'] as const)
       expect(gateAction('reduced', { kind }, auto)).toMatch(/manual-only/)
+  })
+
+  it('Reduced holds back a timed hold, which is a flash when it is short', () => {
+    // Unlike a follow, a holdLevel picks its own value and drops it again.
+    expect(gateAction('reduced', { kind: 'holdLevel' }, auto)).toMatch(/manual-only/)
+    expect(gateAction('reduced', { kind: 'holdLevel' }, staff)).toMatch(/manual-only/)
   })
 
   it('Reduced keeps a level following, Locked still stops it', () => {

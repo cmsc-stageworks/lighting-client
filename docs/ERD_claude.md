@@ -80,7 +80,7 @@ src/
       eventLog.ts               # ring buffer + batch forwarding to renderer
       rules/
         engine.ts               # subscribes to EventBus, evaluates mappings, runs actions
-        actions.ts              # ActionRunner: activateScene, releaseScene, blackout, setLevel, publishMqtt, thoriumMutation
+        actions.ts              # ActionRunner: activateScene, releaseScene, blackout, setLevel, holdLevel, publishMqtt, thoriumMutation
       compositor/
         compositor.ts           # active scene instances, per-universe frame generation
         envelope.ts             # fade in/hold/fade out envelope math (pure)
@@ -315,6 +315,15 @@ export type Action =
       fade: { kind: 'none' } | { kind: 'fixed'; ms: number }
           | { kind: 'fromEvent'; path: string; fallbackMs: number };
       layerId: string | null; label: string }
+  | { kind: 'holdLevel'; target: 'event' | 'all' | { simulatorName: string };
+      addressing: 'absolute' | 'relative'; universe?: number; channels: number[];
+      value: number;                                  // 0–255, set here — the event only supplies the time
+      hold: { kind: 'fromEvent'; path: string; units: 'ms' | 'seconds'; fallbackMs: number }
+          | { kind: 'fixed'; ms: number } | { kind: 'latch' };
+      fallback: { value: number; hold: /* as above */ } | null;   // second stage; null releases at the end of the hold
+      fade: /* as setLevel */ { kind: 'none' } | { kind: 'fixed'; ms: number }
+          | { kind: 'fromEvent'; path: string; fallbackMs: number };
+      layerId: string | null; label: string }
   | { kind: 'publishMqtt'; topic: string; payload: string; qos: 0 | 1 | 2; retain: boolean }
   | { kind: 'thoriumMutation';
       mutation: { kind: 'triggerMacro'; macroName: string }
@@ -412,6 +421,9 @@ Simulator attribution: `thorium.event` payloads that carry `simulatorId` are tag
 value the FD already set and cannot flash, and holding it back would freeze the
 channel wherever it stood when the mode changed — worse for a light-sensitive
 guest than letting it keep following.
+
+`holdLevel` is **not**: it picks its own value and drops it again when the hold
+ends, so a short one is exactly the flash Reduced Effects exists to hold back.
 
 Direct staff commands (`activateSceneByUser`, blackout, release all, Grand Master, alert override from the UI) never pass through the gate. Events they emit carry `staffOrigin`; Locked lets mappings fired by those through, Reduced still filters them.
 
@@ -564,6 +576,48 @@ rather than sitting at 0.
 Levels are ordinary compositor instances otherwise: layer priority, blackout,
 grand master, `channelRange` output guards, `releaseLayer` / `releaseAll` and
 scope-change releases all apply unchanged. Driving a released level brings it back.
+
+### 6.3c Timed channel holds (`holdLevel`)
+
+The mirror of `setLevel`: there the event carries the value and (optionally) the
+time; here it carries only the time.
+
+```
+value  = action.value                                             # 0–255, straight from the config
+holdMs = hold.kind == 'fromEvent' ? (event.data[hold.path] * (units == 'seconds' ? 1000 : 1)) ?? fallbackMs
+       : hold.kind == 'fixed' ? hold.ms : null                    # null = latch, clamped to 1 h
+stage  = action.fallback && { value, holdMs: <same resolution>, fadeMs }   # null → release at the end of the hold
+key    = "hold:<mappingId>:<channels>:<value>"  + ":<profileId>" when relative
+compositor.setLevel(key, { layerId, universe, channels, value, fadeMs, holdMs, nextStage: stage })
+```
+
+The whole cue is resolved from the one triggering event: **hold at `value` → move
+to `fallback.value` and hold that → release**. Both holds read their own path, so
+a single event can carry, say, a hit duration and a cooldown.
+
+`holdMs` sets `instance.holdUntil = now + fadeMs + holdMs`, the same "hold starts
+once the fade in finishes" rule a timed scene uses (a level's fade in is its
+value ramp). When `holdUntil` passes, `tick()` releases the instance over
+`fadeMs` — unless it carries a `nextStage`, in which case `applyStage()` moves it
+to the stage's value in place (crossfading from what it is outputting, exactly
+like a `setLevel` change), arms `holdUntil` again from the stage's own hold and
+clears `nextStage` so a cue only steps down once per firing. A stage with a null
+hold stays up until something releases it.
+
+The second stage lives in the compositor rather than a `setTimeout` in the
+`ActionRunner` on purpose: the compositor owns the clock at 40 Hz, so the step
+down cannot drift or outlive its instance — an early `releaseScene`/`releaseAll`
+(or a scope change) drops the pending stage with everything else.
+Re-firing the mapping re-arms `holdUntil` from the new now on the *same*
+instance, so a repeating event keeps the channels up instead of letting the
+first hold expire underneath it. Everything else — layers, LTP within a layer,
+blackout, grand master, `releaseLayer`/`releaseAll` — is the shared level path
+in `ActionRunner.applyLevel`, so a `setLevel` and a `holdLevel` on the same
+channels are two instances and the later one wins until it expires.
+
+Missing duration is a warning, not a skip: the action still runs for
+`fallbackMs`, because a mistyped path should be visible without dropping the
+cue. (A missing *value* on `setLevel` does skip — there is nothing to write.)
 
 ### 6.4 Scheduler (`scheduler.ts`)
 

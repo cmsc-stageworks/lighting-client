@@ -320,5 +320,121 @@ describe('Compositor', () => {
       expect(s.level).toBe(200)
       expect(s.sceneName).toBe('House')
     })
+
+    it('holds for holdMs and then releases itself', () => {
+      c.setLevel('k', { ...spec, holdMs: 2000 })
+      now += 1999
+      c.tick()
+      expect(c.frame(10).values[5]).toBe(200)
+      now += 2
+      c.tick()
+      expect(c.getInstances()).toHaveLength(0)
+      expect(c.frame(10).values[5]).toBe(0)
+    })
+
+    it('starts the hold after the fade in, like a timed scene', () => {
+      c.setLevel('k', { ...spec, fadeMs: 1000, holdMs: 1000 })
+      now += 1500
+      c.tick()
+      expect(c.frame(10).values[5]).toBe(200)
+      now += 600
+      c.tick()
+      // The hold is over; the same fade time takes it back down.
+      expect(c.activeSummaries()[0].releaseStartedAt).not.toBeNull()
+      now += 1100
+      c.tick()
+      expect(c.getInstances()).toHaveLength(0)
+    })
+
+    it('re-driving re-arms the hold instead of letting the first one expire', () => {
+      c.setLevel('k', { ...spec, holdMs: 1000 })
+      now += 800
+      c.tick()
+      c.setLevel('k', { ...spec, holdMs: 1000 })
+      now += 800
+      c.tick()
+      expect(c.frame(10).values[5]).toBe(200)
+      now += 300
+      c.tick()
+      expect(c.getInstances()).toHaveLength(0)
+    })
+
+    it('steps down to its next stage instead of releasing, then goes', () => {
+      c.setLevel('k', { ...spec, holdMs: 1000, nextStage: { value: 60, holdMs: 500, fadeMs: 0 } })
+      now += 1100
+      c.tick()
+      expect(c.frame(10).values[5]).toBe(60)
+      expect(c.getInstances()).toHaveLength(1)
+      now += 600
+      c.tick()
+      expect(c.getInstances()).toHaveLength(0)
+    })
+
+    it('crossfades into the stage rather than snapping', () => {
+      c.setLevel('k', {
+        ...spec,
+        fadeMs: 0,
+        holdMs: 1000,
+        nextStage: { value: 100, holdMs: 5000, fadeMs: 1000 }
+      })
+      now += 1000
+      c.tick()
+      now += 500
+      c.tick()
+      // Half way from 200 down to 100.
+      expect(c.frame(10).values[5]).toBe(150)
+      now += 500
+      c.tick()
+      expect(c.frame(10).values[5]).toBe(100)
+    })
+
+    it('a stage with no hold stays until something releases it', () => {
+      c.setLevel('k', { ...spec, holdMs: 100, nextStage: { value: 30, holdMs: null, fadeMs: 0 } })
+      now += 200
+      c.tick()
+      now += 600_000
+      c.tick()
+      expect(c.frame(10).values[5]).toBe(30)
+      c.releaseAll()
+      c.tick()
+      expect(c.getInstances()).toHaveLength(0)
+    })
+
+    it('only steps down once per firing', () => {
+      c.setLevel('k', { ...spec, holdMs: 100, nextStage: { value: 30, holdMs: 100, fadeMs: 0 } })
+      now += 150
+      c.tick()
+      expect(c.frame(10).values[5]).toBe(30)
+      now += 150
+      c.tick()
+      expect(c.getInstances()).toHaveLength(0)
+    })
+
+    it('an early release skips the stage entirely', () => {
+      c.setLevel('k', { ...spec, holdMs: 5000, nextStage: { value: 30, holdMs: 1000, fadeMs: 0 } })
+      c.releaseAll()
+      c.tick()
+      expect(c.getInstances()).toHaveLength(0)
+    })
+
+    it('re-driving puts the stage back in front of the hold', () => {
+      c.setLevel('k', { ...spec, holdMs: 1000, nextStage: { value: 30, holdMs: 1000, fadeMs: 0 } })
+      now += 1100
+      c.tick()
+      expect(c.frame(10).values[5]).toBe(30)
+      // Fires again while the fallback is still up: back to the top of the cue.
+      c.setLevel('k', { ...spec, holdMs: 1000, nextStage: { value: 30, holdMs: 1000, fadeMs: 0 } })
+      expect(c.frame(10).values[5]).toBe(200)
+      now += 1100
+      c.tick()
+      expect(c.frame(10).values[5]).toBe(30)
+    })
+
+    it('leaves a level without a hold alone (a value follow latches)', () => {
+      c.setLevel('k', spec)
+      now += 600_000
+      c.tick()
+      expect(c.frame(10).values[5]).toBe(200)
+    })
   })
 })

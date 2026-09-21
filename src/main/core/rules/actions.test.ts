@@ -55,6 +55,20 @@ const setLevel = (over: Partial<Extract<Action, { kind: 'setLevel' }>> = {}): Ac
   ...over
 })
 
+const holdLevel = (over: Partial<Extract<Action, { kind: 'holdLevel' }>> = {}): Action => ({
+  kind: 'holdLevel',
+  target: 'event',
+  addressing: 'relative',
+  channels: [0],
+  value: 200,
+  hold: { kind: 'fromEvent', path: 'duration', units: 'ms', fallbackMs: 1000 },
+  fallback: null,
+  fade: { kind: 'none' },
+  layerId: null,
+  label: 'Flash',
+  ...over
+})
+
 function intensityEvent(over: Partial<AppEvent> = {}): AppEvent {
   return {
     id: 'e',
@@ -224,5 +238,182 @@ describe('ActionRunner setLevel', () => {
     const t = setup()
     await t.runner.runOne(setLevel({ layerId: LAYER_IDS.effect }), intensityEvent(), mapping)
     expect(t.compositor.getInstances()[0].layerId).toBe(LAYER_IDS.effect)
+  })
+})
+
+describe('ActionRunner holdLevel', () => {
+  const damage = (data: Record<string, unknown>): AppEvent =>
+    intensityEvent({ name: 'system.damaged', data })
+
+  it('holds the value the action sets for the duration the event carries', async () => {
+    const t = setup()
+    await t.runner.runOne(holdLevel(), damage({ duration: 3000 }), mapping)
+    expect(t.compositor.frame(10).values[100]).toBe(200)
+    t.advance(2999)
+    expect(t.compositor.frame(10).values[100]).toBe(200)
+    t.advance(2)
+    expect(t.compositor.frame(10).values[100]).toBe(0)
+  })
+
+  it('reads the duration in seconds when the action says so', async () => {
+    const t = setup()
+    await t.runner.runOne(
+      holdLevel({ hold: { kind: 'fromEvent', path: 'duration', units: 'seconds', fallbackMs: 0 } }),
+      damage({ duration: 2 }),
+      mapping
+    )
+    t.advance(1900)
+    expect(t.compositor.frame(10).values[100]).toBe(200)
+    t.advance(200)
+    expect(t.compositor.frame(10).values[100]).toBe(0)
+  })
+
+  it('warns but still holds for the fallback when the path carries no number', async () => {
+    const t = setup()
+    await t.runner.runOne(holdLevel(), damage({}), mapping)
+    expect(t.warnings[0]).toMatch(/no duration at "duration"/)
+    expect(t.compositor.frame(10).values[100]).toBe(200)
+    t.advance(1001)
+    expect(t.compositor.frame(10).values[100]).toBe(0)
+  })
+
+  it('a latch hold stays up until something releases it', async () => {
+    const t = setup()
+    await t.runner.runOne(holdLevel({ hold: { kind: 'latch' } }), damage({ duration: 10 }), mapping)
+    t.advance(60_000)
+    expect(t.compositor.frame(10).values[100]).toBe(200)
+    t.compositor.releaseAll()
+    t.advance(1)
+    expect(t.compositor.frame(10).values[100]).toBe(0)
+  })
+
+  it('re-firing keeps one instance and extends the hold', async () => {
+    const t = setup()
+    const a = holdLevel()
+    await t.runner.runOne(a, damage({ duration: 2000 }), mapping)
+    t.advance(1500)
+    await t.runner.runOne(a, damage({ duration: 2000 }), mapping)
+    expect(t.compositor.getInstances()).toHaveLength(1)
+    t.advance(1500)
+    expect(t.compositor.frame(10).values[100]).toBe(200)
+    t.advance(600)
+    expect(t.compositor.frame(10).values[100]).toBe(0)
+  })
+
+  it('writes at baseAddress + offset, and absolutely when told to', async () => {
+    const t = setup()
+    await t.runner.runOne(holdLevel({ channels: [0, 5] }), damage({ duration: 5000 }), mapping)
+    const f = t.compositor.frame(10)
+    expect(f.values[100]).toBe(200)
+    expect(f.values[105]).toBe(200)
+    await t.runner.runOne(
+      holdLevel({ addressing: 'absolute', universe: 12, channels: [3], value: 77 }),
+      damage({ duration: 5000 }),
+      mapping
+    )
+    expect(t.compositor.frame(12).values[3]).toBe(77)
+  })
+
+  it('does not fight with a setLevel on the same channels', async () => {
+    const t = setup()
+    await t.runner.runOne(setLevel(), intensityEvent(), mapping)
+    await t.runner.runOne(holdLevel(), damage({ duration: 1000 }), mapping)
+    expect(t.compositor.getInstances()).toHaveLength(2)
+    // The hold went on last, so it wins its layer until it expires.
+    expect(t.compositor.frame(10).values[100]).toBe(200)
+    t.advance(1100)
+    expect(t.compositor.frame(10).values[100]).toBe(255)
+  })
+})
+
+describe('ActionRunner holdLevel fallback stage', () => {
+  const damage = (data: Record<string, unknown>): AppEvent =>
+    intensityEvent({ name: 'system.damaged', data })
+
+  it('runs value → fallback → release off one event', async () => {
+    const t = setup()
+    await t.runner.runOne(
+      holdLevel({ fallback: { value: 64, hold: { kind: 'fixed', ms: 2000 } } }),
+      damage({ duration: 1000 }),
+      mapping
+    )
+    expect(t.compositor.frame(10).values[100]).toBe(200)
+    t.advance(1100)
+    expect(t.compositor.frame(10).values[100]).toBe(64)
+    t.advance(1900)
+    expect(t.compositor.frame(10).values[100]).toBe(64)
+    t.advance(200)
+    expect(t.compositor.frame(10).values[100]).toBe(0)
+  })
+
+  it('takes the fallback hold off the event too', async () => {
+    const t = setup()
+    await t.runner.runOne(
+      holdLevel({
+        hold: { kind: 'fixed', ms: 500 },
+        fallback: {
+          value: 100,
+          hold: { kind: 'fromEvent', path: 'cooldown', units: 'seconds', fallbackMs: 0 }
+        }
+      }),
+      damage({ cooldown: 3 }),
+      mapping
+    )
+    t.advance(600)
+    expect(t.compositor.frame(10).values[100]).toBe(100)
+    t.advance(2900)
+    expect(t.compositor.frame(10).values[100]).toBe(100)
+    t.advance(200)
+    expect(t.compositor.frame(10).values[100]).toBe(0)
+  })
+
+  it('a latched fallback waits for a release', async () => {
+    const t = setup()
+    await t.runner.runOne(
+      holdLevel({ fallback: { value: 20, hold: { kind: 'latch' } } }),
+      damage({ duration: 500 }),
+      mapping
+    )
+    t.advance(600)
+    expect(t.compositor.frame(10).values[100]).toBe(20)
+    t.advance(600_000)
+    expect(t.compositor.frame(10).values[100]).toBe(20)
+    t.compositor.releaseAll()
+    t.advance(1)
+    expect(t.compositor.frame(10).values[100]).toBe(0)
+  })
+
+  it('follows each simulator through both stages when targeting all', async () => {
+    const t = setup([magellan, cassini])
+    await t.runner.runOne(
+      holdLevel({
+        target: 'all',
+        fallback: { value: 40, hold: { kind: 'fixed', ms: 1000 } }
+      }),
+      damage({ duration: 500 }),
+      mapping
+    )
+    expect(t.compositor.getInstances()).toHaveLength(2)
+    t.advance(600)
+    const f = t.compositor.frame(10)
+    expect(f.values[100]).toBe(40)
+    expect(f.values[200]).toBe(40)
+  })
+
+  it('warns once per stage when a duration path is wrong', async () => {
+    const t = setup()
+    await t.runner.runOne(
+      holdLevel({
+        fallback: {
+          value: 10,
+          hold: { kind: 'fromEvent', path: 'cooldown', units: 'ms', fallbackMs: 500 }
+        }
+      }),
+      damage({}),
+      mapping
+    )
+    expect(t.warnings).toHaveLength(2)
+    expect(t.warnings[0]).toMatch(/no duration at "duration"/)
+    expect(t.warnings[1]).toMatch(/no duration at "cooldown"/)
   })
 })

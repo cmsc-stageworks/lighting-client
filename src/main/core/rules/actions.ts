@@ -8,14 +8,21 @@ import type {
 } from '@shared/types/config'
 import type { AppEvent } from '@shared/types/events'
 import { renderTemplate } from '@shared/templates'
-import { readLevelInput, resolveFadeMs, scaleLevel } from '@shared/levels'
+import { readLevelInput, resolveFadeMs, resolveHoldMs, scaleLevel } from '@shared/levels'
 import { LAYER_IDS } from '@shared/constants'
 import type { EventBus } from '../eventBus'
 import type { SimulatorRegistry } from '../simulators'
-import type { Compositor } from '../compositor/compositor'
+import type { Compositor, LevelStage } from '../compositor/compositor'
 import { getLogger } from '../../logging'
 
 const log = getLogger('actions')
+
+/** Human phrase for a hold, used in action summaries. */
+function describeHold(hold: Extract<Action, { kind: 'holdLevel' }>['hold']): string {
+  if (hold.kind === 'latch') return 'until released'
+  if (hold.kind === 'fixed') return `${hold.ms}ms`
+  return `${hold.path}${hold.units === 'seconds' ? ' (s)' : ''}`
+}
 
 export interface ActionDeps {
   compositor: Compositor
@@ -181,6 +188,10 @@ export class ActionRunner {
         this.setLevel(action, event, mapping)
         return
       }
+      case 'holdLevel': {
+        this.holdLevel(action, event, mapping)
+        return
+      }
       case 'publishMqtt': {
         const ctx = event
           ? { ...event, simulator: event.simulatorName ?? null }
@@ -229,21 +240,116 @@ export class ActionRunner {
       )
       return
     }
-    const value = scaleLevel(input, action.source)
+    this.applyLevel(
+      {
+        // Identity has to be stable across events but distinct per simulator, so
+        // two ships following their own intensity do not fight over one
+        // instance. It deliberately ignores the ranges, curve, fade and label,
+        // so editing those moves the running level rather than leaving a stale
+        // one behind.
+        base: this.levelKey('level', action, mapping, action.source.path),
+        value: scaleLevel(input, action.source),
+        fadeMs: resolveFadeMs(action.fade, data),
+        holdMs: null,
+        label: action.label || `Level ${action.source.path}`
+      },
+      action,
+      event,
+      mapping
+    )
+  }
+
+  /**
+   * Drive a `holdLevel` action: the value is fixed in the action, the event only
+   * says how long to keep it. Re-firing re-arms the hold on the same instance.
+   */
+  private holdLevel(
+    action: Extract<Action, { kind: 'holdLevel' }>,
+    event: AppEvent | null,
+    mapping: Mapping | null
+  ): void {
+    const data = event?.data ?? {}
     const fadeMs = resolveFadeMs(action.fade, data)
-    const layerId = action.layerId ?? LAYER_IDS.scene
-    const label = action.label || `Level ${action.source.path}`
-    // Identity has to be stable across events but distinct per simulator, so two
-    // ships following their own intensity do not fight over one instance. It
-    // deliberately ignores the ranges, curve, fade and label, so editing those
-    // moves the running level rather than leaving a stale one behind.
-    const base = [
-      'level',
+    const holdMs = this.holdMsFor(action.hold, data, event, mapping)
+    const fallback = action.fallback
+    this.applyLevel(
+      {
+        base: this.levelKey('hold', action, mapping, String(action.value)),
+        value: action.value,
+        fadeMs,
+        holdMs,
+        // The second stage is handed to the compositor rather than timed here:
+        // it owns the clock, so the step down survives a busy event loop and is
+        // dropped with the instance when something releases it early.
+        nextStage: fallback
+          ? {
+              value: fallback.value,
+              holdMs: this.holdMsFor(fallback.hold, data, event, mapping),
+              fadeMs
+            }
+          : null,
+        label: action.label || `Hold ${action.value}`
+      },
+      action,
+      event,
+      mapping
+    )
+  }
+
+  /** Resolve a hold, warning when the event was supposed to carry it and didn't. */
+  private holdMsFor(
+    hold: Extract<Action, { kind: 'holdLevel' }>['hold'],
+    data: unknown,
+    event: AppEvent | null,
+    mapping: Mapping | null
+  ): number | null {
+    const ms = resolveHoldMs(hold, data)
+    if (hold.kind === 'fromEvent' && readLevelInput(data, hold.path) == null) {
+      // Not fatal the way a missing value is — the fallback still gives a
+      // sensible hold — but silence would hide a mistyped path.
+      this.deps.warn(
+        `Mapping "${mapping?.name ?? '?'}": no duration at "${hold.path}" on ${event?.name ?? 'the event'}, holding for ${ms}ms`
+      )
+    }
+    return ms
+  }
+
+  /**
+   * Stable identity for a level instance (see `setLevel` above). `tail`
+   * separates instances that share channels: the source path for a follow, the
+   * value for a hold, so two holds in one mapping do not overwrite each other.
+   */
+  private levelKey(
+    prefix: string,
+    action: Extract<Action, { kind: 'setLevel' | 'holdLevel' }>,
+    mapping: Mapping | null,
+    tail: string
+  ): string {
+    return [
+      prefix,
       mapping?.id ?? 'direct',
       action.addressing === 'absolute' ? `u${action.universe ?? ''}` : 'rel',
       action.channels.join('.'),
-      action.source.path
+      tail
     ].join(':')
+  }
+
+  /** Shared plumbing for both level actions: resolve the address, drive the compositor. */
+  private applyLevel(
+    level: {
+      base: string
+      value: number
+      fadeMs: number
+      holdMs: number | null
+      nextStage?: LevelStage | null
+      label: string
+    },
+    action: Extract<Action, { kind: 'setLevel' | 'holdLevel' }>,
+    event: AppEvent | null,
+    mapping: Mapping | null
+  ): void {
+    const { base, value, fadeMs, holdMs, nextStage = null, label } = level
+    const layerId = action.layerId ?? LAYER_IDS.scene
 
     if (action.addressing === 'absolute') {
       const universe = action.universe ?? this.deps.profile().outputs[0]?.universe ?? 1
@@ -253,6 +359,8 @@ export class ActionRunner {
         channels: action.channels,
         value,
         fadeMs,
+        holdMs,
+        nextStage,
         label
       })
       warnings.forEach((w) => this.deps.warn(w))
@@ -277,6 +385,8 @@ export class ActionRunner {
         channels: action.channels.map((ch) => t.profile!.baseAddress + ch),
         value,
         fadeMs,
+        holdMs,
+        nextStage,
         label,
         simulatorKey: t.profile.id,
         simulatorName: t.profile.name
@@ -299,6 +409,12 @@ export class ActionRunner {
         return action.on ? 'Blackout on' : 'Blackout off'
       case 'setLevel':
         return `Set ch ${action.channels.join(', ')} from ${action.source.path}`
+      case 'holdLevel':
+        return `Hold ch ${action.channels.join(', ')} at ${action.value} for ${describeHold(action.hold)}${
+          action.fallback
+            ? `, then ${action.fallback.value} for ${describeHold(action.fallback.hold)}`
+            : ''
+        }`
       case 'publishMqtt':
         return `Publish ${action.topic}`
       case 'thoriumMutation':

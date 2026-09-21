@@ -59,6 +59,12 @@ function describeAction(
       return a.on ? 'Blackout on' : 'Blackout off'
     case 'setLevel':
       return `${a.label || 'Level'} · ch ${a.channels.join(', ')} from ${a.source.path}`
+    case 'holdLevel': {
+      const span = (h: typeof a.hold): string =>
+        h.kind === 'latch' ? 'until released' : h.kind === 'fixed' ? `${h.ms}ms` : h.path
+      const then = a.fallback ? ` → ${a.fallback.value} for ${span(a.fallback.hold)}` : ''
+      return `${a.label || 'Hold'} · ch ${a.channels.join(', ')} at ${a.value} for ${span(a.hold)}${then}`
+    }
     case 'publishMqtt':
       return `Publish ${a.topic}`
     case 'thoriumMutation':
