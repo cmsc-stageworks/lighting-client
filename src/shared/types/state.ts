@@ -64,6 +64,10 @@ export interface ActiveSceneSummary {
   startedAt: number
   holdUntil: number | null
   releaseStartedAt: number | null
+  /** `level` is a `setLevel` action's channel follow rather than a scene. */
+  kind: 'scene' | 'level'
+  /** Current 0–255 target of a level; null for a scene. */
+  level: number | null
 }
 
 export interface CompositorRuntime {

@@ -57,6 +57,8 @@ function describeAction(
       return 'Release all'
     case 'blackout':
       return a.on ? 'Blackout on' : 'Blackout off'
+    case 'setLevel':
+      return `${a.label || 'Level'} · ch ${a.channels.join(', ')} from ${a.source.path}`
     case 'publishMqtt':
       return `Publish ${a.topic}`
     case 'thoriumMutation':

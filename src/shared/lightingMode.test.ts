@@ -18,6 +18,7 @@ const kinds: GateKind[] = [
   'blackout',
   'grandMaster',
   'setChannel',
+  'setLevel',
   'alertLevel',
   'publishMqtt',
   'thoriumMutation'
@@ -47,6 +48,14 @@ describe('gateAction', () => {
       expect(gateAction('reduced', { kind }, auto)).toBeNull()
     for (const kind of ['blackout', 'grandMaster', 'setChannel'] as const)
       expect(gateAction('reduced', { kind }, auto)).toMatch(/manual-only/)
+  })
+
+  it('Reduced keeps a level following, Locked still stops it', () => {
+    // Freezing a follower mid-show leaves the channel wherever it happened to
+    // be; letting it track the FD's slider is the gentler outcome.
+    expect(gateAction('reduced', { kind: 'setLevel' }, auto)).toBeNull()
+    expect(gateAction('locked', { kind: 'setLevel' }, auto)).toMatch(/Locked/)
+    expect(gateAction('locked', { kind: 'setLevel' }, staff)).toBeNull()
   })
 
   it('Reduced still filters mappings fired by a staff action', () => {

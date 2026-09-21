@@ -1,8 +1,9 @@
 import React from 'react'
 import { ArrowDown, ArrowUp, Plus, ShieldOff, Trash2 } from 'lucide-react'
 import type { Action, ActionTarget } from '@shared/types/config'
-import { LAYER_IDS } from '@shared/constants'
+import { DMX_CHANNELS, LAYER_IDS, LEVEL_CURVES } from '@shared/constants'
 import { gateAction, gateRequestForAction } from '@shared/lightingMode'
+import { scaleLevel } from '@shared/levels'
 import { useConfig } from '../../store/config'
 import { useRuntime } from '../../store/runtime'
 import { Button, Checkbox, Field, Input, NumberInput, Select, TextArea } from '../../components/ui'
@@ -13,6 +14,7 @@ const KIND_LABELS: Record<Action['kind'], string> = {
   releaseLayer: 'Release layer',
   releaseAll: 'Release all scenes',
   blackout: 'Blackout',
+  setLevel: 'Set channel level',
   publishMqtt: 'Publish MQTT message',
   thoriumMutation: 'Send to Thorium'
 }
@@ -29,6 +31,25 @@ function defaultAction(kind: Action['kind'], firstSceneId: string, firstLayerId:
       return { kind }
     case 'blackout':
       return { kind, on: true }
+    case 'setLevel':
+      return {
+        kind,
+        target: 'event',
+        addressing: 'relative',
+        channels: [0],
+        source: {
+          path: 'intensity',
+          inMin: 0,
+          inMax: 1,
+          outMin: 0,
+          outMax: 255,
+          curve: 'linear',
+          invert: false
+        },
+        fade: { kind: 'fromEvent', path: 'transitionDuration', fallbackMs: 0 },
+        layerId: null,
+        label: ''
+      }
     case 'publishMqtt':
       return {
         kind,
@@ -62,6 +83,39 @@ function TargetSelect({
         { value: 'all', label: 'All simulators in scope' },
         ...profile.simulators.map((s) => ({ value: `sim:${s.name}`, label: `Only ${s.name}` }))
       ]}
+    />
+  )
+}
+
+function ChannelList({
+  value,
+  onChange,
+  relative
+}: {
+  value: number[]
+  onChange: (v: number[]) => void
+  relative: boolean
+}): React.JSX.Element {
+  const [text, setText] = React.useState(value.join(', '))
+  const [prev, setPrev] = React.useState(value)
+  if (prev !== value) {
+    setPrev(value)
+    setText(value.join(', '))
+  }
+  return (
+    <Input
+      value={text}
+      className="mono"
+      placeholder={relative ? '0, 1, 2' : '12, 13'}
+      onChange={(e) => {
+        setText(e.target.value)
+        const parsed = e.target.value
+          .split(',')
+          .map((x) => Number(x.trim()))
+          .filter((n) => Number.isInteger(n) && n >= (relative ? 0 : 1) && n <= DMX_CHANNELS)
+        if (parsed.length) onChange(parsed)
+      }}
+      onBlur={() => setText(value.join(', '))}
     />
   )
 }
@@ -216,6 +270,171 @@ export function ActionsEditor({
                   ]}
                 />
               </Field>
+            )}
+            {a.kind === 'setLevel' && (
+              <>
+                <Field label="Addressing">
+                  <Select
+                    value={a.addressing}
+                    onChange={(v) => setAt(i, { ...a, addressing: v as 'relative' | 'absolute' })}
+                    options={[
+                      { value: 'relative', label: "Relative to the simulator's base address" },
+                      { value: 'absolute', label: 'Absolute universe / channel' }
+                    ]}
+                  />
+                </Field>
+                {a.addressing === 'relative' ? (
+                  <Field label="For">
+                    <TargetSelect
+                      value={a.target}
+                      onChange={(t) => setAt(i, { ...a, target: t })}
+                    />
+                  </Field>
+                ) : (
+                  <Field label="Universe">
+                    <NumberInput
+                      value={a.universe ?? 1}
+                      min={1}
+                      onChange={(v) => setAt(i, { ...a, universe: v })}
+                    />
+                  </Field>
+                )}
+                <Field
+                  label="Channels"
+                  hint={
+                    a.addressing === 'relative'
+                      ? 'Offsets from the base address, comma separated'
+                      : 'Absolute channels, comma separated'
+                  }
+                >
+                  <ChannelList
+                    value={a.channels}
+                    relative={a.addressing === 'relative'}
+                    onChange={(v) => setAt(i, { ...a, channels: v })}
+                  />
+                </Field>
+                <Field label="Value from" hint="Path on the event — Thorium intensity is 0–1">
+                  <Input
+                    value={a.source.path}
+                    className="mono"
+                    placeholder="intensity"
+                    onChange={(e) =>
+                      setAt(i, { ...a, source: { ...a.source, path: e.target.value } })
+                    }
+                  />
+                </Field>
+                <div className="col-span-2 grid grid-cols-4 gap-3">
+                  <Field label="In min">
+                    <NumberInput
+                      value={a.source.inMin}
+                      step={0.1}
+                      onChange={(v) => setAt(i, { ...a, source: { ...a.source, inMin: v } })}
+                    />
+                  </Field>
+                  <Field label="In max">
+                    <NumberInput
+                      value={a.source.inMax}
+                      step={0.1}
+                      onChange={(v) => setAt(i, { ...a, source: { ...a.source, inMax: v } })}
+                    />
+                  </Field>
+                  <Field label="Out min">
+                    <NumberInput
+                      value={a.source.outMin}
+                      min={0}
+                      max={255}
+                      onChange={(v) => setAt(i, { ...a, source: { ...a.source, outMin: v } })}
+                    />
+                  </Field>
+                  <Field label="Out max">
+                    <NumberInput
+                      value={a.source.outMax}
+                      min={0}
+                      max={255}
+                      onChange={(v) => setAt(i, { ...a, source: { ...a.source, outMax: v } })}
+                    />
+                  </Field>
+                </div>
+                <Field label="Curve">
+                  <Select
+                    value={a.source.curve}
+                    onChange={(v) =>
+                      setAt(i, {
+                        ...a,
+                        source: { ...a.source, curve: v as (typeof LEVEL_CURVES)[number] }
+                      })
+                    }
+                    options={[
+                      { value: 'linear', label: 'Linear' },
+                      { value: 'square', label: 'Square (slow start)' },
+                      { value: 'sqrt', label: 'Square root (fast start)' }
+                    ]}
+                  />
+                </Field>
+                <Field label="Layer">
+                  <Select
+                    value={a.layerId ?? LAYER_IDS.scene}
+                    onChange={(v) => setAt(i, { ...a, layerId: v })}
+                    options={layers.map((l) => ({ value: l.id, label: l.name }))}
+                  />
+                </Field>
+                <Field label="Fade">
+                  <Select
+                    value={a.fade.kind}
+                    onChange={(v) =>
+                      setAt(i, {
+                        ...a,
+                        fade:
+                          v === 'none'
+                            ? { kind: 'none' }
+                            : v === 'fixed'
+                              ? { kind: 'fixed', ms: 500 }
+                              : { kind: 'fromEvent', path: 'transitionDuration', fallbackMs: 0 }
+                      })
+                    }
+                    options={[
+                      { value: 'fromEvent', label: "Follow Thorium's transition duration" },
+                      { value: 'fixed', label: 'Fixed time' },
+                      { value: 'none', label: 'Snap (no fade)' }
+                    ]}
+                  />
+                </Field>
+                {a.fade.kind === 'fixed' && (
+                  <Field label="Fade (ms)">
+                    <NumberInput
+                      value={a.fade.ms}
+                      min={0}
+                      onChange={(v) => setAt(i, { ...a, fade: { kind: 'fixed', ms: v } })}
+                    />
+                  </Field>
+                )}
+                {a.fade.kind === 'fromEvent' && (
+                  <Field label="Fallback fade (ms)" hint="Used when the event carries no duration">
+                    <NumberInput
+                      value={a.fade.fallbackMs}
+                      min={0}
+                      onChange={(v) =>
+                        setAt(i, {
+                          ...a,
+                          fade: { kind: 'fromEvent', path: 'transitionDuration', fallbackMs: v }
+                        })
+                      }
+                    />
+                  </Field>
+                )}
+                <Field label="Label" hint="Shown on the Dashboard while this level is live">
+                  <Input
+                    value={a.label}
+                    placeholder="House dimmer"
+                    onChange={(e) => setAt(i, { ...a, label: e.target.value })}
+                  />
+                </Field>
+                <div className="col-span-2 text-[12px] text-faint mono">
+                  {[a.source.inMin, (a.source.inMin + a.source.inMax) / 2, a.source.inMax]
+                    .map((x) => `${x} → ${scaleLevel(x, a.source)}`)
+                    .join('   ·   ')}
+                </div>
+              </>
             )}
             {a.kind === 'publishMqtt' && (
               <>

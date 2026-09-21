@@ -1,4 +1,4 @@
-export const CONFIG_SCHEMA_VERSION = 5
+export const CONFIG_SCHEMA_VERSION = 6
 
 export const DMX_CHANNELS = 512
 export const DMX_MAX_VALUE = 255
@@ -46,6 +46,9 @@ export const LIGHTING_ACTIONS = [
   'strobe',
   'oscillate'
 ] as const
+
+/** Response curves for the `setLevel` action's value mapping. */
+export const LEVEL_CURVES = ['linear', 'square', 'sqrt'] as const
 
 export const THORIUM_TRIGGER_ACTIONS = [
   'flash',

@@ -88,6 +88,16 @@ export const migrations: Migration[] = [
     up(raw) {
       return { ...raw, schemaVersion: 5 }
     }
+  },
+  {
+    // v6: the `setLevel` action (a channel that follows a value on the event).
+    // Purely additive — no existing action grows a field — so the bump exists
+    // only to stop an older build from silently dropping these actions on save.
+    from: 5,
+    to: 6,
+    up(raw) {
+      return { ...raw, schemaVersion: 6 }
+    }
   }
 ]
 

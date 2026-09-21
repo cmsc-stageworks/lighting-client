@@ -42,6 +42,52 @@ describe('deriveSimulator', () => {
       'lighting.intensityChanged'
     ])
   })
+
+  it('emits the intensity on the first read so a follower lands on the live level', () => {
+    const a = deriveSimulator(null, {
+      id: 's',
+      alertlevel: '5',
+      lighting: { action: 'normal', intensity: 0.4 }
+    })
+    const ev = a.events.find((e) => e.name === 'lighting.intensityChanged')
+    expect(ev).toBeDefined()
+    expect(ev!.data).toMatchObject({ intensity: 0.4, previous: null, initial: true })
+  })
+
+  it('carries the fade duration, which Thorium expects the client to run', () => {
+    const a = deriveSimulator(null, {
+      id: 's',
+      alertlevel: '5',
+      lighting: { action: 'normal', intensity: 0 }
+    })
+    const b = deriveSimulator(a.state, {
+      id: 's',
+      alertlevel: '5',
+      lighting: { action: 'fade', intensity: 1, transitionDuration: 5000 }
+    })
+    const ev = b.events.find((e) => e.name === 'lighting.intensityChanged')!
+    expect(ev.data).toMatchObject({
+      intensity: 1,
+      previous: 0,
+      action: 'fade',
+      transitionDuration: 5000,
+      initial: false
+    })
+  })
+
+  it('does not re-emit intensity when nothing moved', () => {
+    const a = deriveSimulator(null, {
+      id: 's',
+      alertlevel: '5',
+      lighting: { action: 'normal', intensity: 0.4 }
+    })
+    const b = deriveSimulator(a.state, {
+      id: 's',
+      alertlevel: '5',
+      lighting: { action: 'normal', intensity: 0.4 }
+    })
+    expect(b.events).toEqual([])
+  })
 })
 
 describe('deriveReactors', () => {

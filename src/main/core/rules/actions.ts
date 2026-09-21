@@ -8,6 +8,8 @@ import type {
 } from '@shared/types/config'
 import type { AppEvent } from '@shared/types/events'
 import { renderTemplate } from '@shared/templates'
+import { readLevelInput, resolveFadeMs, scaleLevel } from '@shared/levels'
+import { LAYER_IDS } from '@shared/constants'
 import type { EventBus } from '../eventBus'
 import type { SimulatorRegistry } from '../simulators'
 import type { Compositor } from '../compositor/compositor'
@@ -175,6 +177,10 @@ export class ActionRunner {
       case 'blackout':
         this.deps.compositor.setBlackout(action.on)
         return
+      case 'setLevel': {
+        this.setLevel(action, event, mapping)
+        return
+      }
       case 'publishMqtt': {
         const ctx = event
           ? { ...event, simulator: event.simulatorName ?? null }
@@ -206,6 +212,79 @@ export class ActionRunner {
     }
   }
 
+  /**
+   * Drive a `setLevel` action. One compositor instance per action per simulator,
+   * so a stream of intensity changes updates a single channel follow in place.
+   */
+  private setLevel(
+    action: Extract<Action, { kind: 'setLevel' }>,
+    event: AppEvent | null,
+    mapping: Mapping | null
+  ): void {
+    const data = event?.data ?? {}
+    const input = readLevelInput(data, action.source.path)
+    if (input == null) {
+      this.deps.warn(
+        `Mapping "${mapping?.name ?? '?'}": no number at "${action.source.path}" on ${event?.name ?? 'the event'}`
+      )
+      return
+    }
+    const value = scaleLevel(input, action.source)
+    const fadeMs = resolveFadeMs(action.fade, data)
+    const layerId = action.layerId ?? LAYER_IDS.scene
+    const label = action.label || `Level ${action.source.path}`
+    // Identity has to be stable across events but distinct per simulator, so two
+    // ships following their own intensity do not fight over one instance. It
+    // deliberately ignores the ranges, curve, fade and label, so editing those
+    // moves the running level rather than leaving a stale one behind.
+    const base = [
+      'level',
+      mapping?.id ?? 'direct',
+      action.addressing === 'absolute' ? `u${action.universe ?? ''}` : 'rel',
+      action.channels.join('.'),
+      action.source.path
+    ].join(':')
+
+    if (action.addressing === 'absolute') {
+      const universe = action.universe ?? this.deps.profile().outputs[0]?.universe ?? 1
+      const { warnings } = this.deps.compositor.setLevel(base, {
+        layerId,
+        universe,
+        channels: action.channels,
+        value,
+        fadeMs,
+        label
+      })
+      warnings.forEach((w) => this.deps.warn(w))
+      return
+    }
+
+    const targets = this.resolveTargets(action.target, event)
+    if (targets.length === 0) {
+      this.deps.warn(`Mapping "${mapping?.name ?? '?'}": no simulator resolved for "${label}"`)
+      return
+    }
+    for (const t of targets) {
+      if (!t.profile) {
+        this.deps.warn(
+          `No simulator profile named "${this.deps.registry.thoriumSimulatorById(t.thoriumId ?? '')?.name ?? t.thoriumId}" — add it on the Simulators page to use relative levels`
+        )
+        continue
+      }
+      const { warnings } = this.deps.compositor.setLevel(`${base}:${t.profile.id}`, {
+        layerId,
+        universe: t.profile.universe,
+        channels: action.channels.map((ch) => t.profile!.baseAddress + ch),
+        value,
+        fadeMs,
+        label,
+        simulatorKey: t.profile.id,
+        simulatorName: t.profile.name
+      })
+      warnings.forEach((w) => this.deps.warn(w))
+    }
+  }
+
   describe(action: Action): string {
     switch (action.kind) {
       case 'activateScene':
@@ -218,6 +297,8 @@ export class ActionRunner {
         return 'Release all'
       case 'blackout':
         return action.on ? 'Blackout on' : 'Blackout off'
+      case 'setLevel':
+        return `Set ch ${action.channels.join(', ')} from ${action.source.path}`
       case 'publishMqtt':
         return `Publish ${action.topic}`
       case 'thoriumMutation':

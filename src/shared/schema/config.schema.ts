@@ -1,5 +1,11 @@
 import { z } from 'zod'
-import { CONFIG_SCHEMA_VERSION, DMX_CHANNELS, MAX_FPS, SACN_MAX_UNIVERSE } from '../constants'
+import {
+  CONFIG_SCHEMA_VERSION,
+  DMX_CHANNELS,
+  LEVEL_CURVES,
+  MAX_FPS,
+  SACN_MAX_UNIVERSE
+} from '../constants'
 
 // ---------------------------------------------------------------------------
 // Primitives
@@ -277,6 +283,31 @@ export const ThoriumMutationActionSchema = z.discriminatedUnion('kind', [
   })
 ])
 
+/** A number on the event, scaled onto a DMX value (see `shared/levels.ts`). */
+export const LevelSourceSchema = z.object({
+  /** Dot-path into `event.data`; Thorium's lighting intensity is `intensity` (0–1). */
+  path: z.string().trim().min(1).default('intensity'),
+  inMin: z.number().default(0),
+  inMax: z.number().default(1),
+  outMin: dmxValue.default(0),
+  outMax: dmxValue.default(255),
+  curve: z.enum(LEVEL_CURVES).default('linear'),
+  invert: z.boolean().default(false)
+})
+export type LevelSource = z.infer<typeof LevelSourceSchema>
+
+export const LevelFadeSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('none') }),
+  z.object({ kind: z.literal('fixed'), ms: z.number().int().min(0).max(600_000) }),
+  /** Take the duration from the event — Thorium sends `transitionDuration` in ms. */
+  z.object({
+    kind: z.literal('fromEvent'),
+    path: z.string().trim().min(1).default('transitionDuration'),
+    fallbackMs: z.number().int().min(0).max(600_000).default(0)
+  })
+])
+export type LevelFade = z.infer<typeof LevelFadeSchema>
+
 export const ActionSchema = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('activateScene'),
@@ -303,6 +334,24 @@ export const ActionSchema = z.discriminatedUnion('kind', [
     payload: z.string().default(''),
     qos: qos.default(0),
     retain: z.boolean().default(false)
+  }),
+  /**
+   * Hold one or more channels at a value taken from the event, updating in place
+   * as the event repeats (e.g. a dimmer that follows Thorium's lighting intensity).
+   */
+  z.object({
+    kind: z.literal('setLevel'),
+    target: ActionTargetSchema.default('event'),
+    addressing: z.enum(['absolute', 'relative']).default('relative'),
+    /** Absolute addressing only; relative uses the simulator profile's universe. */
+    universe: universe.optional(),
+    /** Absolute channels, or offsets from the profile's baseAddress when relative. */
+    channels: z.array(z.number().int().min(0).max(DMX_CHANNELS)).min(1),
+    source: LevelSourceSchema.prefault({}),
+    fade: LevelFadeSchema.prefault({ kind: 'fromEvent' }),
+    layerId: id.nullable().default(null),
+    /** Shown on the Dashboard instead of a scene name. */
+    label: z.string().trim().max(60).default('')
   }),
   z.object({ kind: z.literal('thoriumMutation'), mutation: ThoriumMutationActionSchema })
 ])
