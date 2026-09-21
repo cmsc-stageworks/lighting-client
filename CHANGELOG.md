@@ -1,3 +1,10 @@
+# [1.2.0](https://github.com/cmsc-stageworks/lighting-client/compare/v1.1.0...v1.2.0) (2026-09-21)
+
+
+### Features
+
+* **map-levels:** Allows for mapping in a specific value ([efa266d](https://github.com/cmsc-stageworks/lighting-client/commit/efa266dea23686707d395546f26e073bf7e9952a))
+
 # [1.1.0](https://github.com/cmsc-stageworks/lighting-client/compare/v1.0.2...v1.1.0) (2026-09-15)
 
 
