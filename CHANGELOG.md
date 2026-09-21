@@ -1,3 +1,11 @@
+# [1.3.0](https://github.com/cmsc-stageworks/lighting-client/compare/v1.2.0...v1.3.0) (2026-09-21)
+
+
+### Features
+
+* Added thorium option to change value based on input ([9459d1d](https://github.com/cmsc-stageworks/lighting-client/commit/9459d1d505ce3635c78745da6b75001c36ce3aea))
+* prettier fix ([aad17ea](https://github.com/cmsc-stageworks/lighting-client/commit/aad17ea3bbba885ae654cba3e239449c89d1aef8))
+
 # [1.2.0](https://github.com/cmsc-stageworks/lighting-client/compare/v1.1.0...v1.2.0) (2026-09-21)
 
 
