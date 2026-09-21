@@ -113,7 +113,6 @@ export function FirstRunWizard(): React.JSX.Element {
           ))}
         </div>
 
-
         {step === 0 && (
           <div>
             <h1 className="text-2xl font-semibold mb-2">Welcome to the CMSC Lighting Client</h1>
