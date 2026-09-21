@@ -189,27 +189,46 @@ const presets: TriggerPreset[] = [
     key: 'thorium.lightingIntensity',
     label: 'Thorium lighting intensity',
     group: 'Lighting',
-    description: 'Fires when the lighting intensity slider changes. Intensity is 0–1.',
-    paramsSchema: z.object({ op: z.enum(['lt', 'gt', 'eq']), value: z.number().min(0).max(1) }),
+    description:
+      'Fires when the lighting intensity slider changes. Intensity is 0–1. Use "any change" to drive a "Set channel level" action.',
+    paramsSchema: z.object({
+      op: z.enum(['any', 'lt', 'gt', 'eq']),
+      value: z.number().min(0).max(1),
+      includeInitial: z.boolean().default(true)
+    }),
     fields: [
       {
         key: 'op',
         label: 'Condition',
         kind: 'select',
         options: [
+          { value: 'any', label: 'any change' },
           { value: 'lt', label: 'below' },
           { value: 'gt', label: 'above' },
           { value: 'eq', label: 'equals' }
         ]
       },
-      { key: 'value', label: 'Intensity (0–1)', kind: 'number', min: 0, max: 1, step: 0.05 }
+      { key: 'value', label: 'Intensity (0–1)', kind: 'number', min: 0, max: 1, step: 0.05 },
+      {
+        key: 'includeInitial',
+        label: 'Also fire on connect (apply current intensity)',
+        kind: 'boolean',
+        help: 'Keep this on for a channel that follows the slider, so it lands on the live level after a reconnect.'
+      }
     ],
-    defaults: { op: 'lt', value: 0.5 },
-    summarize: (p) => `Intensity ${p.op} ${p.value}`,
+    defaults: { op: 'lt', value: 0.5, includeInitial: true },
+    summarize: (p) => (p.op === 'any' ? 'Intensity changes' : `Intensity ${p.op} ${p.value}`),
     compile: (p) => ({
       types: ['thorium.state'],
       names: ['lighting.intensityChanged'],
-      conditions: [{ path: 'intensity', op: p.op as Condition['op'], value: Number(p.value) }]
+      conditions: [
+        ...(p.op === 'any'
+          ? []
+          : [{ path: 'intensity', op: p.op as Condition['op'], value: Number(p.value) }]),
+        ...(p.includeInitial === false
+          ? [{ path: 'initial', op: 'eq' as const, value: false }]
+          : [])
+      ]
     })
   },
   {

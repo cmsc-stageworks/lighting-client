@@ -17,7 +17,38 @@ export interface ActiveInstance extends EnvelopeState {
   frames: Map<number, Uint8Array>
   /** universe → 513-byte mask (1 = scene sets this channel) */
   masks: Map<number, Uint8Array>
+  /**
+   * Identity of a self-updating level instance (the `setLevel` action), so a
+   * stream of value changes updates one instance in place. Null for scenes.
+   */
+  levelKey: string | null
+  /**
+   * Values to interpolate *from* while a level change is in flight. A level
+   * instance fades its channel values; it does not fade its own opacity the way
+   * a scene does, because there is nothing underneath it to cross into.
+   */
+  fromFrames: Map<number, Uint8Array> | null
+  valueFadeStartedAt: number
+  valueFadeMs: number
+  /** The 0–255 level a `setLevel` instance is heading to (for the Dashboard). */
+  levelValue: number | null
   origin: { mappingId?: string; eventId?: string; ui?: boolean; test?: boolean }
+}
+
+/** Progress of an in-place value fade; 1 once it has settled. */
+function valueFadeT(i: ActiveInstance, now: number): number {
+  if (!i.fromFrames || i.valueFadeMs <= 0) return 1
+  const t = (now - i.valueFadeStartedAt) / i.valueFadeMs
+  return t >= 1 ? 1 : Math.max(0, t)
+}
+
+/** An instance's value for one channel, part-way through any in-place value fade. */
+function instanceValue(i: ActiveInstance, universe: number, ch: number, now: number): number {
+  const target = i.frames.get(universe)![ch]
+  const t = valueFadeT(i, now)
+  if (t >= 1) return target
+  const from = i.fromFrames?.get(universe)?.[ch] ?? 0
+  return from + (target - from) * t
 }
 
 export interface ResolvedFrame {
@@ -108,7 +139,9 @@ export class Compositor extends EventEmitter {
         simulatorName: i.simulatorName,
         startedAt: i.startedAt,
         holdUntil: i.holdUntil,
-        releaseStartedAt: i.releaseStartedAt
+        releaseStartedAt: i.releaseStartedAt,
+        kind: i.levelKey ? ('level' as const) : ('scene' as const),
+        level: i.levelValue
       }))
   }
 
@@ -193,6 +226,11 @@ export class Compositor extends EventEmitter {
       holdUntil: holdMs != null ? now + scene.fadeInMs + holdMs : null,
       frames,
       masks,
+      levelKey: null,
+      fromFrames: null,
+      valueFadeStartedAt: now,
+      valueFadeMs: 0,
+      levelValue: null,
       origin: opts.origin ?? {}
     }
     this.instances.push(inst)
@@ -245,6 +283,113 @@ export class Compositor extends EventEmitter {
     if (this.instances.length !== before) this.emit('change')
   }
 
+  // ------------------------------------------------------------------ levels
+
+  /**
+   * Hold `channels` at `value`, creating the instance on first call and updating
+   * it in place on every call after that (keyed by `key`). Unlike a scene
+   * re-activation, a change crossfades the channel *values* from where they
+   * currently are to the new ones, so a dimmer follow never dips through the
+   * layer underneath.
+   */
+  setLevel(
+    key: string,
+    spec: {
+      layerId: string
+      universe: number
+      channels: number[]
+      value: number
+      fadeMs: number
+      label: string
+      simulatorKey?: string | null
+      simulatorName?: string | null
+    }
+  ): { instance: ActiveInstance | null; warnings: string[] } {
+    const warnings: string[] = []
+    if (!this.layerById(spec.layerId)) {
+      warnings.push(`Layer for level "${spec.label}" not found`)
+      return { instance: null, warnings }
+    }
+    const now = this.now()
+    const value = clamp(Math.round(spec.value), 0, 255)
+    const frames = new Map<number, Uint8Array>()
+    const masks = new Map<number, Uint8Array>()
+    const f = new Uint8Array(DMX_CHANNELS + 1)
+    const m = new Uint8Array(DMX_CHANNELS + 1)
+    for (const ch of spec.channels) {
+      if (ch < 1 || ch > DMX_CHANNELS) {
+        warnings.push(`Channel ${ch} on universe ${spec.universe} is out of range and was dropped`)
+        continue
+      }
+      f[ch] = value
+      m[ch] = 1
+    }
+    if (!m.some((x) => x === 1)) return { instance: null, warnings }
+    frames.set(spec.universe, f)
+    masks.set(spec.universe, m)
+
+    const existing = this.instances.find((i) => i.levelKey === key)
+    if (existing) {
+      // Start the new fade from what this instance is actually outputting right
+      // now — a change part-way through a fade continues from there, not from
+      // the value the last change was aiming at.
+      const from = new Map<number, Uint8Array>()
+      for (const [u, arr] of existing.frames) {
+        const snapshot = new Uint8Array(DMX_CHANNELS + 1)
+        for (let ch = 1; ch <= DMX_CHANNELS; ch++)
+          if (arr[ch] || existing.masks.get(u)![ch])
+            snapshot[ch] = Math.round(instanceValue(existing, u, ch, now))
+        from.set(u, snapshot)
+        this.dirty.add(u)
+      }
+      existing.layerId = spec.layerId
+      existing.sceneName = spec.label
+      existing.simulatorName = spec.simulatorName ?? null
+      existing.frames = frames
+      existing.masks = masks
+      existing.fromFrames = from
+      existing.valueFadeStartedAt = now
+      existing.valueFadeMs = Math.max(0, spec.fadeMs)
+      existing.fadeOutMs = Math.max(0, spec.fadeMs)
+      existing.levelValue = value
+      // A level that was released and is being driven again comes back to life.
+      existing.releaseStartedAt = null
+      existing.releaseLevel = 1
+      this.dirty.add(spec.universe)
+      this.emit('change')
+      return { instance: existing, warnings }
+    }
+
+    const inst: ActiveInstance = {
+      instanceId: uuid(),
+      sceneId: key,
+      sceneName: spec.label,
+      layerId: spec.layerId,
+      simulatorId: spec.simulatorKey ?? null,
+      simulatorName: spec.simulatorName ?? null,
+      startedAt: now,
+      fadeInMs: 0,
+      fadeOutMs: Math.max(0, spec.fadeMs),
+      startLevel: 1,
+      releaseStartedAt: null,
+      releaseLevel: 1,
+      holdUntil: null,
+      frames,
+      masks,
+      levelKey: key,
+      // A brand-new level ramps its value up from 0 rather than snapping on.
+      fromFrames: new Map([[spec.universe, new Uint8Array(DMX_CHANNELS + 1)]]),
+      valueFadeStartedAt: now,
+      valueFadeMs: Math.max(0, spec.fadeMs),
+      levelValue: value,
+      origin: {}
+    }
+    this.instances.push(inst)
+    this.dirty.add(spec.universe)
+    this.emit('change')
+    return { instance: inst, warnings }
+  }
+
   // ------------------------------------------------------------------ test layer
 
   private testInstance: ActiveInstance | null = null
@@ -267,6 +412,11 @@ export class Compositor extends EventEmitter {
         holdUntil: null,
         frames: new Map(),
         masks: new Map(),
+        levelKey: null,
+        fromFrames: null,
+        valueFadeStartedAt: this.now(),
+        valueFadeMs: 0,
+        levelValue: null,
         origin: { test: true }
       }
       this.instances.push(this.testInstance)
@@ -311,7 +461,14 @@ export class Compositor extends EventEmitter {
         i.releaseStartedAt = now
         changed = true
       }
-      if (envelopeIsAnimating(i, now)) for (const u of i.frames.keys()) this.dirty.add(u)
+      if (i.fromFrames && valueFadeT(i, now) >= 1) {
+        // The value fade just settled: drop the interpolation source and render
+        // once more, or the cached frame would keep serving the last step.
+        i.fromFrames = null
+        for (const u of i.frames.keys()) this.dirty.add(u)
+      }
+      if (envelopeIsAnimating(i, now) || valueFadeT(i, now) < 1)
+        for (const u of i.frames.keys()) this.dirty.add(u)
     }
     const before = this.instances.length
     this.instances = this.instances.filter((i) => {
@@ -357,7 +514,7 @@ export class Compositor extends EventEmitter {
         if (!winner) continue
         let e = envelopeLevel(winner, now)
         if (e === DONE) e = 0
-        const v = winner.frames.get(universe)![ch]
+        const v = instanceValue(winner, universe, ch, now)
         values[ch] = values[ch] * (1 - e) + v * e
         if (e > 0) owners[ch] = winner.instanceId
       }

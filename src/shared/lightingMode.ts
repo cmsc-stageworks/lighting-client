@@ -45,6 +45,7 @@ export type GateKind =
   | 'blackout'
   | 'grandMaster'
   | 'setChannel'
+  | 'setLevel'
   | 'alertLevel'
   | 'publishMqtt'
   | 'thoriumMutation'
@@ -59,10 +60,19 @@ export interface GateRequest {
 
 const NON_LIGHTING: GateKind[] = ['publishMqtt', 'thoriumMutation']
 const RELEASES: GateKind[] = ['releaseScene', 'releaseLayer', 'releaseAll']
+/**
+ * Allowed in Reduced Effects. A `setLevel` channel *tracks* a value the Flight
+ * Director already set (Thorium's intensity slider); blocking it would freeze
+ * the channel wherever it stood when the mode changed, which is worse for a
+ * light-sensitive guest than letting it keep following — and it cannot flash,
+ * because a single value with a fade is not an effect.
+ */
+const REDUCED_ALLOWED: GateKind[] = ['setLevel']
 const GLOBAL_LABEL: Partial<Record<GateKind, string>> = {
   blackout: 'Blackout',
   grandMaster: 'Grand Master',
-  setChannel: 'Raw channel control'
+  setChannel: 'Raw channel control',
+  setLevel: 'Channel level'
 }
 
 /**
@@ -84,6 +94,7 @@ export function gateAction(
     return ctx.staffOrigin ? null : 'Lights are Locked — only staff actions in this app change them'
   // reduced
   if (RELEASES.includes(req.kind) || req.kind === 'alertLevel') return null
+  if (REDUCED_ALLOWED.includes(req.kind)) return null
   if (req.kind === 'activateScene')
     return req.sceneCleared
       ? null

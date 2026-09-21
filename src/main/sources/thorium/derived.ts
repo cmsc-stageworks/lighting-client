@@ -79,11 +79,24 @@ export function deriveSimulator(
       }
     })
   }
-  if (!initial && prev.lightingIntensity !== intensity && intensity != null) {
+  if ((initial || prev.lightingIntensity !== intensity) && intensity != null) {
+    // Emitted on the first read too, so a channel that follows intensity lands on
+    // the ship's *current* level after a reconnect instead of sitting at 0. The
+    // `initial` flag lets a mapping opt out with a condition.
+    //
+    // `transitionDuration` rides along because Thorium publishes the destination
+    // intensity immediately and ramps to it in its own client (`lightingFadeLights`),
+    // so anything following the value has to run that fade itself.
     events.push({
       name: 'lighting.intensityChanged',
       simulatorId: sim.id,
-      data: { intensity, previous: prev.lightingIntensity }
+      data: {
+        intensity,
+        previous: prev?.lightingIntensity ?? null,
+        action,
+        transitionDuration: sim.lighting?.transitionDuration ?? null,
+        initial
+      }
     })
   }
   return { events, state }

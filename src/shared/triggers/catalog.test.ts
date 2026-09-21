@@ -333,3 +333,31 @@ describe('trigger catalog', () => {
     ).toBe(false)
   })
 })
+
+describe('thorium.lightingIntensity', () => {
+  const intensity = (data: Record<string, unknown>): AppEvent =>
+    ev({ type: 'thorium.state', name: 'lighting.intensityChanged', data })
+  const trigger = (params: Record<string, unknown>): ReturnType<typeof compile> =>
+    compile({ preset: 'thorium.lightingIntensity', params, conditions: [] }, { refData: null })
+
+  it('"any change" matches every intensity event, which is what a level follow needs', () => {
+    const t = trigger({ op: 'any' })
+    expect(matchTrigger(t, intensity({ intensity: 0, initial: false }))).toBe(true)
+    expect(matchTrigger(t, intensity({ intensity: 1, initial: false }))).toBe(true)
+    expect(summarizeTrigger('thorium.lightingIntensity', { op: 'any' })).toBe('Intensity changes')
+  })
+
+  it('keeps threshold behaviour for existing mappings', () => {
+    const t = trigger({ op: 'lt', value: 0.5 })
+    expect(matchTrigger(t, intensity({ intensity: 0.2, initial: false }))).toBe(true)
+    expect(matchTrigger(t, intensity({ intensity: 0.8, initial: false }))).toBe(false)
+  })
+
+  it('can opt out of the event the app emits on connect', () => {
+    const on = trigger({ op: 'any' })
+    const off = trigger({ op: 'any', includeInitial: false })
+    expect(matchTrigger(on, intensity({ intensity: 0.5, initial: true }))).toBe(true)
+    expect(matchTrigger(off, intensity({ intensity: 0.5, initial: true }))).toBe(false)
+    expect(matchTrigger(off, intensity({ intensity: 0.5, initial: false }))).toBe(true)
+  })
+})

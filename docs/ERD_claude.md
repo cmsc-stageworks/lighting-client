@@ -80,7 +80,7 @@ src/
       eventLog.ts               # ring buffer + batch forwarding to renderer
       rules/
         engine.ts               # subscribes to EventBus, evaluates mappings, runs actions
-        actions.ts              # ActionRunner: activateScene, releaseScene, blackout, publishMqtt, thoriumMutation
+        actions.ts              # ActionRunner: activateScene, releaseScene, blackout, setLevel, publishMqtt, thoriumMutation
       compositor/
         compositor.ts           # active scene instances, per-universe frame generation
         envelope.ts             # fade in/hold/fade out envelope math (pure)
@@ -308,6 +308,13 @@ export type Action =
   | { kind: 'releaseScene'; sceneId: string; target: 'event' | 'all' | { simulatorName: string } }
   | { kind: 'releaseLayer'; layerId: string; target: 'event' | 'all' }
   | { kind: 'blackout'; on: boolean }
+  | { kind: 'setLevel'; target: 'event' | 'all' | { simulatorName: string };
+      addressing: 'absolute' | 'relative'; universe?: number; channels: number[];
+      source: { path: string; inMin: number; inMax: number; outMin: number; outMax: number;
+                curve: 'linear' | 'square' | 'sqrt'; invert: boolean };
+      fade: { kind: 'none' } | { kind: 'fixed'; ms: number }
+          | { kind: 'fromEvent'; path: string; fallbackMs: number };
+      layerId: string | null; label: string }
   | { kind: 'publishMqtt'; topic: string; payload: string; qos: 0 | 1 | 2; retain: boolean }
   | { kind: 'thoriumMutation';
       mutation: { kind: 'triggerMacro'; macroName: string }
@@ -401,6 +408,11 @@ Simulator attribution: `thorium.event` payloads that carry `simulatorId` are tag
 - `Services.onMqttCommand`, before dispatch: a held-back command emits `system`/`lightingMode.heldBack` so it appears in the inspector.
 - Renderer hints (Mappings badge, ActionsEditor, mode dialog) call it with `mode: 'reduced'`.
 
+`setLevel` is allowed in Reduced Effects (and still blocked in Locked): it tracks a
+value the FD already set and cannot flash, and holding it back would freeze the
+channel wherever it stood when the mode changed — worse for a light-sensitive
+guest than letting it keep following.
+
 Direct staff commands (`activateSceneByUser`, blackout, release all, Grand Master, alert override from the UI) never pass through the gate. Events they emit carry `staffOrigin`; Locked lets mappings fired by those through, Reduced still filters them.
 
 Mode state lives in `Services` and is persisted by `main/config/modeState.ts` as `userData/lighting-mode.json` `{ mode, since, day }` (atomic write, outside config.json). `load()` restores it only when `day` is today; it runs in `init()` before any source starts. `setLightingMode(mode, { releaseUncleared, catchUpAlerts })` optionally releases active scenes that aren't cleared (entering Reduced) and re-asserts each in-scope simulator's alert level (moving to a less restrictive mode), then emits `ui.action`/`lightingMode`. `staleDay` is computed per snapshot; nothing switches automatically.
@@ -423,7 +435,7 @@ export interface CompiledTrigger {
 | `thorium.alertLevelAny` | Alert | – | `name=alertLevel.changed` |
 | `thorium.training` | Alert | `on: boolean` | `name=training.changed cond training eq on` |
 | `thorium.lightingAction` | Lighting | `actions: LIGHTING_ACTION[]` | `type=thorium.event name=lightingSetEffect,updateSimulatorLighting,lightingShakeLights,lightingFadeLights` + derived `lighting.actionChanged` cond action in actions |
-| `thorium.lightingIntensity` | Lighting | `op, value` | `name=lighting.intensityChanged` |
+| `thorium.lightingIntensity` | Lighting | `op: 'any'|'lt'|'gt'|'eq'`, `value`, `includeInitial` | `name=lighting.intensityChanged`; `op=any` compiles no condition (what a `setLevel` follow wants) |
 | `thorium.generic` | Macros | `key: string` (glob allowed) | `type=thorium.event name=generic cond key glob` |
 | `thorium.macro` | Macros | `macroName` | `name=triggerMacroAction cond macroId eq <resolved id>` (resolved at compile time through registry; re-compiled when reference data refreshes) |
 | `thorium.macroButton` | Macros | `configName`, `buttonName` | `name=triggerMacroButton cond configId,buttonId` |
@@ -519,6 +531,39 @@ resolve(scene, simulator | null):
      for e in entries: set(simulator.universe, simulator.baseAddress + e.channel, e.value)  (drop if > 512, warn)
 key = (sceneId, layerId, simulatorId)  → if an instance with this key exists it is replaced (its startedAt resets, fade-in restarts from its current envelope level to avoid a dip)
 ```
+
+### 6.3b Channel levels (`setLevel`)
+
+A scene is a fixed snapshot, so a channel whose value tracks something — a dimmer
+that follows Thorium's lighting intensity — is a separate primitive.
+
+```
+value  = scaleLevel(resolvePath(event.data, source.path), source)   # shared/levels.ts, → 0–255
+fadeMs = fade.kind == 'fromEvent' ? event.data[fade.path] ?? fallbackMs : (fade.ms | 0)
+key    = "level:<mappingId>:<channels>"  + ":<profileId>" when relative
+compositor.setLevel(key, { layerId, universe, channels, value, fadeMs })
+```
+
+`key` gives the instance its identity: a stream of intensity changes updates **one**
+instance in place instead of stacking activations, and a relative level keys per
+simulator profile so two ships never fight over one instance.
+
+A level change crossfades the channel **values** (`fromFrames` → `frames` over
+`valueFadeMs`), not the instance's envelope. Fading the envelope would cross into
+whatever sits on the layer below, which for a dimmer reads as a dip. A brand-new
+level ramps from 0; a change part-way through a fade continues from the value
+currently being output, not from the one the last change was aiming at.
+
+Thorium makes the fade ours to run: `lightingFadeLights` sets `lighting.intensity`
+to the *destination* immediately and publishes `transitionDuration` for its own
+client to ramp with, so `fade: 'fromEvent'` reproduces the FD's timing.
+`lighting.intensityChanged` is also emitted on the first read of a simulator
+(`initial: true`) so a level lands on the ship's live intensity after a reconnect
+rather than sitting at 0.
+
+Levels are ordinary compositor instances otherwise: layer priority, blackout,
+grand master, `channelRange` output guards, `releaseLayer` / `releaseAll` and
+scope-change releases all apply unchanged. Driving a released level brings it back.
 
 ### 6.4 Scheduler (`scheduler.ts`)
 

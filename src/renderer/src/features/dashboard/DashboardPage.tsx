@@ -383,6 +383,9 @@ export function DashboardPage(): React.JSX.Element {
                   >
                     <span className="truncate">
                       <span className="font-medium">{a.sceneName}</span>
+                      {a.kind === 'level' && a.level != null && (
+                        <span className="text-muted mono"> · {a.level}</span>
+                      )}
                       {a.simulatorName && <span className="text-muted"> · {a.simulatorName}</span>}
                     </span>
                     <span className="text-faint shrink-0">
