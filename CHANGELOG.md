@@ -1,3 +1,10 @@
+# [1.4.0](https://github.com/cmsc-stageworks/lighting-client/compare/v1.3.0...v1.4.0) (2026-09-26)
+
+
+### Features
+
+* Added ability to add mapping groups and intensity defaults ([d7934b2](https://github.com/cmsc-stageworks/lighting-client/commit/d7934b2fb03c4f427b692a037bfb47e7debf523d))
+
 # [1.3.0](https://github.com/cmsc-stageworks/lighting-client/compare/v1.2.0...v1.3.0) (2026-09-21)
 
 
