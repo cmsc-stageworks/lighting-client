@@ -17,10 +17,16 @@ const KIND_LABELS: Record<Action['kind'], string> = {
   setLevel: 'Set channel level',
   holdLevel: 'Hold channel at a value',
   publishMqtt: 'Publish MQTT message',
-  thoriumMutation: 'Send to Thorium'
+  thoriumMutation: 'Send to Thorium',
+  setMappingGroup: 'Switch mapping group'
 }
 
-function defaultAction(kind: Action['kind'], firstSceneId: string, firstLayerId: string): Action {
+function defaultAction(
+  kind: Action['kind'],
+  firstSceneId: string,
+  firstLayerId: string,
+  firstGroupId: string
+): Action {
   switch (kind) {
     case 'activateScene':
       return { kind, sceneId: firstSceneId, target: 'event', layerId: null, holdMsOverride: null }
@@ -49,7 +55,8 @@ function defaultAction(kind: Action['kind'], firstSceneId: string, firstLayerId:
         },
         fade: { kind: 'fromEvent', path: 'transitionDuration', fallbackMs: 0 },
         layerId: null,
-        label: ''
+        label: '',
+        idle: null
       }
     case 'holdLevel':
       return {
@@ -74,6 +81,8 @@ function defaultAction(kind: Action['kind'], firstSceneId: string, firstLayerId:
       }
     case 'thoriumMutation':
       return { kind, mutation: { kind: 'triggerMacro', macroName: '' } }
+    case 'setMappingGroup':
+      return { kind, groupId: firstGroupId }
   }
 }
 
@@ -330,6 +339,9 @@ export function ActionsEditor({
   const layers = profile.layers.filter(
     (l) => l.id !== LAYER_IDS.test && l.id !== LAYER_IDS.blackout
   )
+  const groups = profile.mappingGroups
+  const makeDefault = (k: Action['kind']): Action =>
+    defaultAction(k, scenes[0]?.id ?? '', layers[0]?.id ?? '', groups[0]?.id ?? '')
   const setAt = (i: number, a: Action): void => onChange(actions.map((x, k) => (k === i ? a : x)))
   const move = (i: number, d: -1 | 1): void => {
     const j = i + d
@@ -366,12 +378,7 @@ export function ActionsEditor({
             <Field label="Action">
               <Select
                 value={a.kind}
-                onChange={(k) =>
-                  setAt(
-                    i,
-                    defaultAction(k as Action['kind'], scenes[0]?.id ?? '', layers[0]?.id ?? '')
-                  )
-                }
+                onChange={(k) => setAt(i, makeDefault(k as Action['kind']))}
                 options={(Object.keys(KIND_LABELS) as Action['kind'][]).map((k) => ({
                   value: k,
                   label: KIND_LABELS[k]
@@ -549,7 +556,55 @@ export function ActionsEditor({
                     .map((x) => `${x} → ${scaleLevel(x, a.source)}`)
                     .join('   ·   ')}
                 </div>
+                <div className="col-span-2 flex flex-col gap-2 border-t border-border pt-3">
+                  <Checkbox
+                    checked={a.idle != null}
+                    onChange={(on) =>
+                      setAt(i, { ...a, idle: on ? { value: 40, ignoreInitialZero: true } : null })
+                    }
+                    label="When there's no signal, hold a working light"
+                  />
+                  <div className="text-[12px] text-faint">
+                    Held from the moment the app starts, and whenever nothing is driving these
+                    channels (Thorium offline, client unassigned, scenes released). A value the
+                    Flight Director sets — including 0 — still wins. Blackout still goes fully dark.
+                  </div>
+                  {a.idle && (
+                    <div className="grid grid-cols-2 gap-3">
+                      <Field label="No-signal value" hint="0–255">
+                        <NumberInput
+                          value={a.idle.value}
+                          min={0}
+                          max={255}
+                          onChange={(v) => setAt(i, { ...a, idle: { ...a.idle!, value: v } })}
+                        />
+                      </Field>
+                      <div className="self-end pb-1.5">
+                        <Checkbox
+                          checked={a.idle.ignoreInitialZero}
+                          onChange={(v) =>
+                            setAt(i, { ...a, idle: { ...a.idle!, ignoreInitialZero: v } })
+                          }
+                          label="Treat Thorium's starting 0 as no signal"
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
               </>
+            )}
+            {a.kind === 'setMappingGroup' && (
+              <Field
+                label="Group"
+                hint="Only mappings in this group (and ungrouped ones) fire afterwards"
+              >
+                <Select
+                  value={a.groupId}
+                  onChange={(v) => setAt(i, { ...a, groupId: v })}
+                  options={groups.map((g) => ({ value: g.id, label: g.name }))}
+                  placeholder="Choose a group"
+                />
+              </Field>
             )}
             {a.kind === 'holdLevel' && (
               <>
@@ -805,10 +860,11 @@ export function ActionsEditor({
             key={k}
             size="sm"
             icon={<Plus size={12} />}
-            onClick={() =>
-              onChange([...actions, defaultAction(k, scenes[0]?.id ?? '', layers[0]?.id ?? '')])
+            onClick={() => onChange([...actions, makeDefault(k)])}
+            disabled={
+              ((k === 'activateScene' || k === 'releaseScene') && scenes.length === 0) ||
+              (k === 'setMappingGroup' && groups.length === 0)
             }
-            disabled={(k === 'activateScene' || k === 'releaseScene') && scenes.length === 0}
           >
             {KIND_LABELS[k]}
           </Button>

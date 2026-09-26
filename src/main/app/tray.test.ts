@@ -49,6 +49,7 @@ function snap(over: Partial<RuntimeSnapshot> = {}): RuntimeSnapshot {
     unresolvedMappings: {},
     alertOverrides: {},
     lightingMode: { mode: 'normal', since: 0, staleDay: false, heldBack: { count: 0, last: null } },
+    mappingGroup: { activeId: null, groups: [] },
     update: {
       state: 'idle',
       currentVersion: '1.0.0',
@@ -118,6 +119,17 @@ describe('tray', () => {
     expect(statusLines(snap({ lightingMode: { ...snap().lightingMode, mode: 'locked' } }))[3]).toBe(
       'Lighting: Locked'
     )
+  })
+
+  it('statusLines names the active mapping group when there are groups', () => {
+    const groups = [
+      { id: 'g1', name: 'Purple desks', color: '#a78bfa' },
+      { id: 'g2', name: 'Pink desks', color: '#f472b6' }
+    ]
+    expect(statusLines(snap({ mappingGroup: { activeId: 'g2', groups } }))).toContain(
+      'Mapping group: Pink desks'
+    )
+    expect(statusLines(snap()).some((l) => l.startsWith('Mapping group'))).toBe(false)
   })
 
   it('statusLines appends an update line only when one is available or ready', () => {

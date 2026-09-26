@@ -9,6 +9,7 @@ import {
   GitBranch,
   Globe,
   Layers,
+  Layers3,
   Plus,
   Ship,
   Trash2
@@ -38,13 +39,15 @@ import {
 } from '../../components/ui'
 import { MappingEditor, SimulatorChips } from './MappingEditor'
 import { SimulatePanel } from './SimulatePanel'
+import { GroupBadge, MappingGroupsModal } from './MappingGroups'
 
 const ANY = '__any__'
 
 function describeAction(
   a: Action,
   sceneName: (id: string) => string,
-  layerName: (id: string) => string
+  layerName: (id: string) => string,
+  groupName: (id: string) => string
 ): string {
   switch (a.kind) {
     case 'activateScene':
@@ -58,7 +61,9 @@ function describeAction(
     case 'blackout':
       return a.on ? 'Blackout on' : 'Blackout off'
     case 'setLevel':
-      return `${a.label || 'Level'} · ch ${a.channels.join(', ')} from ${a.source.path}`
+      return `${a.label || 'Level'} · ch ${a.channels.join(', ')} from ${a.source.path}${
+        a.idle ? ` (no signal: ${a.idle.value})` : ''
+      }`
     case 'holdLevel': {
       const span = (h: typeof a.hold): string =>
         h.kind === 'latch' ? 'until released' : h.kind === 'fixed' ? `${h.ms}ms` : h.path
@@ -73,6 +78,8 @@ function describeAction(
         : a.mutation.kind === 'setAlertLevel'
           ? `Alert level ${a.mutation.level}`
           : 'Notify FD'
+    case 'setMappingGroup':
+      return `Switch to group “${groupName(a.groupId)}”`
   }
 }
 
@@ -141,6 +148,7 @@ function mappingFromEvent(e: AppEvent, firstSceneId: string | undefined): Mappin
         ]
       : [],
     debounceMs: 0,
+    groupIds: [],
     notes: `Created from an event seen at ${new Date(e.ts).toLocaleTimeString()}.`
   }
 }
@@ -158,6 +166,8 @@ export function MappingsPage(): React.JSX.Element {
   const [simFilter, setSimFilter] = useState('')
   const [catFilter, setCatFilter] = useState('')
   const [groupFilter, setGroupFilter] = useState('')
+  const [mgFilter, setMgFilter] = useState('')
+  const [groupsOpen, setGroupsOpen] = useState(false)
   const [statusFilter, setStatusFilter] = useState(
     () => new URLSearchParams(loc.search).get('status') ?? ''
   )
@@ -212,6 +222,8 @@ export function MappingsPage(): React.JSX.Element {
       if (catFilter && (m.category || 'General') !== catFilter) return false
       if (groupFilter && !m.triggers.some((t) => getPreset(t.preset)?.group === groupFilter))
         return false
+      if (mgFilter === ANY && m.groupIds.length > 0) return false
+      if (mgFilter && mgFilter !== ANY && !m.groupIds.includes(mgFilter)) return false
       const stats = snapshot?.mappingsStats[m.id]
       const unresolved = !!snapshot?.unresolvedMappings[m.id]
       if (statusFilter === 'enabled' && !m.enabled) return false
@@ -239,11 +251,14 @@ export function MappingsPage(): React.JSX.Element {
       }
       return true
     })
-  }, [profile, simFilter, catFilter, groupFilter, statusFilter, q, snapshot])
+  }, [profile, simFilter, catFilter, groupFilter, mgFilter, statusFilter, q, snapshot])
 
   if (!profile) return <></>
   const sceneName = (id: string): string => profile.scenes.find((s) => s.id === id)?.name ?? '?'
   const layerName = (id: string): string => profile.layers.find((l) => l.id === id)?.name ?? '?'
+  const groupName = (id: string): string =>
+    profile.mappingGroups.find((g) => g.id === id)?.name ?? '?'
+  const activeGroupId = snapshot?.mappingGroup.activeId ?? null
 
   const create = (simNames: string[] = simFilter && simFilter !== ANY ? [simFilter] : []): void => {
     const m: Mapping = {
@@ -271,6 +286,7 @@ export function MappingsPage(): React.JSX.Element {
           ]
         : [],
       debounceMs: 0,
+      groupIds: mgFilter && mgFilter !== ANY ? [mgFilter] : [],
       notes: ''
     }
     update((d) => ({ ...d, mappings: [...d.mappings, m] }))
@@ -282,7 +298,8 @@ export function MappingsPage(): React.JSX.Element {
       id: uuid(),
       name: `${m.name} copy`,
       triggers: m.triggers.map((t) => ({ ...t })),
-      simulatorNames: [...m.simulatorNames]
+      simulatorNames: [...m.simulatorNames],
+      groupIds: [...m.groupIds]
     }
     update((d) => ({ ...d, mappings: [...d.mappings, copy] }))
     setEditing(copy.id)
@@ -302,6 +319,19 @@ export function MappingsPage(): React.JSX.Element {
     update((d) => ({
       ...d,
       mappings: d.mappings.map((x) => (ids.has(x.id) ? { ...x, enabled } : x))
+    }))
+  const setGroupMembership = (ids: Set<string>, groupId: string, add: boolean): void =>
+    update((d) => ({
+      ...d,
+      mappings: d.mappings.map((x) =>
+        !ids.has(x.id)
+          ? x
+          : add
+            ? x.groupIds.includes(groupId)
+              ? x
+              : { ...x, groupIds: [...x.groupIds, groupId] }
+            : { ...x, groupIds: x.groupIds.filter((g) => g !== groupId) }
+      )
     }))
   const removeMany = (ids: Set<string>): void => {
     const removed = profile.mappings.filter((x) => ids.has(x.id))
@@ -463,6 +493,10 @@ export function MappingsPage(): React.JSX.Element {
           </div>
           <div className="text-[12px] text-muted flex items-center gap-1.5 mt-0.5">
             <Badge>{m.category || 'General'}</Badge>
+            {m.groupIds.map((id) => {
+              const g = profile.mappingGroups.find((x) => x.id === id)
+              return g ? <GroupBadge key={id} group={g} active={id === activeGroupId} /> : null
+            })}
             {!groupBySim &&
               (sims.length ? (
                 sims.map((s) => (
@@ -486,7 +520,7 @@ export function MappingsPage(): React.JSX.Element {
           )}
         </td>
         <td className="px-3 py-2.5 text-muted">
-          {m.actions.map((a) => describeAction(a, sceneName, layerName)).join(' → ')}
+          {m.actions.map((a) => describeAction(a, sceneName, layerName, groupName)).join(' → ')}
         </td>
         <td className="px-3 py-2.5 text-muted whitespace-nowrap">
           {stats?.lastFiredAt ? formatAgo(stats.lastFiredAt) : 'never'}
@@ -513,11 +547,17 @@ export function MappingsPage(): React.JSX.Element {
         title="Mappings"
         subtitle="Rules that turn Thorium, MQTT and UI events into lighting changes. Filter by simulator to work on one ship at a time."
         actions={
-          <Button variant="primary" icon={<Plus size={16} />} onClick={() => create()}>
-            New mapping{simFilter && simFilter !== ANY ? ` for ${simFilter}` : ''}
-          </Button>
+          <>
+            <Button icon={<Layers3 size={16} />} onClick={() => setGroupsOpen(true)}>
+              Groups{profile.mappingGroups.length ? ` (${profile.mappingGroups.length})` : ''}
+            </Button>
+            <Button variant="primary" icon={<Plus size={16} />} onClick={() => create()}>
+              New mapping{simFilter && simFilter !== ANY ? ` for ${simFilter}` : ''}
+            </Button>
+          </>
         }
       />
+      <MappingGroupsModal open={groupsOpen} onClose={() => setGroupsOpen(false)} />
       <div className="flex items-center gap-3 mb-3">
         <Tabs
           value={tab}
@@ -579,6 +619,18 @@ export function MappingsPage(): React.JSX.Element {
                 ...PRESET_GROUPS.map((g) => ({ value: g, label: g }))
               ]}
             />
+            {profile.mappingGroups.length > 0 && (
+              <Select
+                value={mgFilter}
+                onChange={setMgFilter}
+                className="w-44"
+                options={[
+                  { value: '', label: 'All mapping groups' },
+                  { value: ANY, label: 'In every group' },
+                  ...profile.mappingGroups.map((g) => ({ value: g.id, label: `Group: ${g.name}` }))
+                ]}
+              />
+            )}
             <Select
               value={statusFilter}
               onChange={setStatusFilter}
@@ -621,6 +673,28 @@ export function MappingsPage(): React.JSX.Element {
               <Button size="sm" icon={<Ship size={13} />} onClick={() => setCopyTarget([])}>
                 Copy to simulators…
               </Button>
+              {profile.mappingGroups.length > 0 && (
+                <>
+                  <Select
+                    value=""
+                    onChange={(v) => v && setGroupMembership(selected, v, true)}
+                    className="w-40"
+                    options={[
+                      { value: '', label: 'Add to group…' },
+                      ...profile.mappingGroups.map((g) => ({ value: g.id, label: g.name }))
+                    ]}
+                  />
+                  <Select
+                    value=""
+                    onChange={(v) => v && setGroupMembership(selected, v, false)}
+                    className="w-44"
+                    options={[
+                      { value: '', label: 'Remove from group…' },
+                      ...profile.mappingGroups.map((g) => ({ value: g.id, label: g.name }))
+                    ]}
+                  />
+                </>
+              )}
               <InlineConfirm
                 label="Delete"
                 question={`Delete ${selected.size}?`}

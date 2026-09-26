@@ -108,6 +108,16 @@ export const migrations: Migration[] = [
     up(raw) {
       return { ...raw, schemaVersion: 7 }
     }
+  },
+  {
+    // v8: mapping groups (`profile.mappingGroups`, `mapping.groupIds`, the
+    // `setMappingGroup` action) and `setLevel.idle`. All default to "off", so
+    // this is additive; the bump stops an older build from dropping them on save.
+    from: 7,
+    to: 8,
+    up(raw) {
+      return { ...raw, schemaVersion: 8 }
+    }
   }
 ]
 

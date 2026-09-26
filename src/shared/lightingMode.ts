@@ -50,6 +50,7 @@ export type GateKind =
   | 'alertLevel'
   | 'publishMqtt'
   | 'thoriumMutation'
+  | 'setMappingGroup'
 
 export interface GateRequest {
   kind: GateKind
@@ -59,7 +60,11 @@ export interface GateRequest {
   sceneCleared?: boolean
 }
 
-const NON_LIGHTING: GateKind[] = ['publishMqtt', 'thoriumMutation']
+/**
+ * Never held back. Switching mapping group changes no channel by itself; the
+ * looks it brings in come from mappings that are gated on their own.
+ */
+const NON_LIGHTING: GateKind[] = ['publishMqtt', 'thoriumMutation', 'setMappingGroup']
 const RELEASES: GateKind[] = ['releaseScene', 'releaseLayer', 'releaseAll']
 /**
  * Allowed in Reduced Effects. A `setLevel` channel *tracks* a value the Flight

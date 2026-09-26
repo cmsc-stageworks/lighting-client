@@ -3,6 +3,7 @@ import type { AppEvent } from '@shared/types/events'
 import type { ReferenceData } from '@shared/types/state'
 import { compileMapping, matchMapping, type CompiledMapping } from '@shared/triggers/matcher'
 import { gateAction, gateRequestForAction, type LightingMode } from '@shared/lightingMode'
+import { mappingInGroup } from '@shared/mappingGroups'
 import { getLogger } from '../../logging'
 import type { ActionRunner } from './actions'
 
@@ -32,6 +33,7 @@ export class RulesEngine {
   private stats = new Map<string, { lastFiredAt: number | null; count: number }>()
   private refData: ReferenceData | null = null
   private mappings: Mapping[] = []
+  private activeGroupId: string | null = null
 
   constructor(
     private runner: ActionRunner,
@@ -64,9 +66,21 @@ export class RulesEngine {
     this.recompile()
   }
 
+  /** Only mappings in this group (and ungrouped ones) fire. Null = every mapping. */
+  setActiveGroup(groupId: string | null): void {
+    if (groupId === this.activeGroupId) return
+    this.activeGroupId = groupId
+    this.recompile()
+  }
+
+  /** Whether a mapping can currently fire (enabled and in the active group). */
+  isLive(mapping: Mapping): boolean {
+    return mapping.enabled && mappingInGroup(mapping, this.activeGroupId)
+  }
+
   private recompile(): void {
     this.compiled = this.mappings
-      .filter((m) => m.enabled)
+      .filter((m) => this.isLive(m))
       .map((mapping) => ({
         mapping,
         compiled: compileMapping(mapping, { refData: this.refData })

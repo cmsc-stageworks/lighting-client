@@ -38,7 +38,18 @@ export interface ActiveInstance extends EnvelopeState {
    * once it has been applied, so a level only steps down once per firing.
    */
   nextStage: LevelStage | null
-  origin: { mappingId?: string; eventId?: string; ui?: boolean; test?: boolean }
+  origin: {
+    mappingId?: string
+    eventId?: string
+    ui?: boolean
+    test?: boolean
+    /**
+     * A `setLevel` action's "no signal" floor (see `ActionRunner.applyFloors`).
+     * Owned by the config, not by events: layer and release-all paths leave it
+     * alone so it is still there when the live level lets go.
+     */
+    floor?: boolean
+  }
 }
 
 /** Progress of an in-place value fade; 1 once it has settled. */
@@ -155,7 +166,8 @@ export class Compositor extends EventEmitter {
         holdUntil: i.holdUntil,
         releaseStartedAt: i.releaseStartedAt,
         kind: i.levelKey ? ('level' as const) : ('scene' as const),
-        level: i.levelValue
+        level: i.levelValue,
+        floor: i.origin.floor === true
       }))
   }
 
@@ -282,12 +294,15 @@ export class Compositor extends EventEmitter {
       (i) =>
         i.layerId === layerId &&
         !i.origin.test &&
+        !i.origin.floor &&
         (simulatorKey === 'all' || (i.simulatorId ?? null) === simulatorKey)
     )
   }
 
   releaseAll(includeBase = false): number {
-    return this.release((i) => !i.origin.test && (includeBase || i.layerId !== LAYER_IDS.base))
+    return this.release(
+      (i) => !i.origin.test && !i.origin.floor && (includeBase || i.layerId !== LAYER_IDS.base)
+    )
   }
 
   /** Immediately drop instances (no fade). */
@@ -326,6 +341,7 @@ export class Compositor extends EventEmitter {
       nextStage?: LevelStage | null
       simulatorKey?: string | null
       simulatorName?: string | null
+      origin?: ActiveInstance['origin']
     }
   ): { instance: ActiveInstance | null; warnings: string[] } {
     const warnings: string[] = []
@@ -376,6 +392,7 @@ export class Compositor extends EventEmitter {
       // and puts the fallback stage back in front of it.
       existing.holdUntil = holdUntil
       existing.nextStage = spec.nextStage ?? null
+      if (spec.origin) existing.origin = spec.origin
       // A level that was released and is being driven again comes back to life.
       existing.releaseStartedAt = null
       existing.releaseLevel = 1
@@ -401,18 +418,32 @@ export class Compositor extends EventEmitter {
       frames,
       masks,
       levelKey: key,
-      // A brand-new level ramps its value up from 0 rather than snapping on.
-      fromFrames: new Map([[spec.universe, new Uint8Array(DMX_CHANNELS + 1)]]),
+      // A brand-new level ramps its value from whatever those channels show
+      // right now (0 when nothing drives them), so taking over from a floor or
+      // a scene underneath never dips through black first.
+      fromFrames: new Map([[spec.universe, this.currentValues(spec.universe, m)]]),
       valueFadeStartedAt: now,
       valueFadeMs: Math.max(0, spec.fadeMs),
       levelValue: value,
       nextStage: spec.nextStage ?? null,
-      origin: {}
+      origin: spec.origin ?? {}
     }
     this.instances.push(inst)
     this.dirty.add(spec.universe)
     this.emit('change')
     return { instance: inst, warnings }
+  }
+
+  /**
+   * The composited value (before Grand Master and blackout) of the channels in
+   * `mask` on `universe` right now, for a new level to start its fade from.
+   */
+  private currentValues(universe: number, mask: Uint8Array): Uint8Array {
+    const values = this.composite(universe, this.now()).values
+    const out = new Uint8Array(DMX_CHANNELS + 1)
+    for (let ch = 1; ch <= DMX_CHANNELS; ch++)
+      if (mask[ch]) out[ch] = clamp(Math.round(values[ch]), 0, 255)
+    return out
   }
 
   /**
@@ -569,7 +600,21 @@ export class Compositor extends EventEmitter {
   }
 
   private render(universe: number): ResolvedFrame {
-    const now = this.now()
+    const { values, owners } = this.composite(universe, this.now())
+    const out = new Uint8Array(DMX_CHANNELS + 1)
+    if (!this.blackout) {
+      for (let ch = 1; ch <= DMX_CHANNELS; ch++) {
+        out[ch] = clamp(Math.round(values[ch] * this.grandMaster), 0, 255)
+      }
+    }
+    return { values: out, owners }
+  }
+
+  /** Layer the instances for one universe (before Grand Master and blackout). */
+  private composite(
+    universe: number,
+    now: number
+  ): { values: Float32Array; owners: (string | null)[] } {
     const values = new Float32Array(DMX_CHANNELS + 1)
     const owners: (string | null)[] = new Array(DMX_CHANNELS + 1).fill(null)
     for (const layer of this.layers) {
@@ -593,13 +638,7 @@ export class Compositor extends EventEmitter {
         if (e > 0) owners[ch] = winner.instanceId
       }
     }
-    const out = new Uint8Array(DMX_CHANNELS + 1)
-    if (!this.blackout) {
-      for (let ch = 1; ch <= DMX_CHANNELS; ch++) {
-        out[ch] = clamp(Math.round(values[ch] * this.grandMaster), 0, 255)
-      }
-    }
-    return { values: out, owners }
+    return { values, owners }
   }
 
   private markAllDirty(): void {

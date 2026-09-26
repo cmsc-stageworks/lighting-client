@@ -50,6 +50,7 @@ export interface IpcApi {
     opts: { releaseUncleared?: boolean; catchUpAlerts?: boolean }
   ) => void
   'lightingMode.keepForToday': () => void
+  'mappingGroup.set': (groupId: string) => void
   'dmx.subscribeUniverse': (universe: number, on: boolean) => void
   'dmx.setTestChannel': (universe: number, channel: number, value: number | null) => void
   'dmx.clearTest': () => void

@@ -36,6 +36,8 @@ export interface ActionDeps {
     notify: (simulatorId: string, title: string, body: string, color: string) => Promise<void>
   }
   warn: (message: string) => void
+  /** Switch the active mapping group (the `setMappingGroup` action). */
+  setMappingGroup: (groupId: string, by: { mappingName: string }) => void
 }
 
 interface TargetSim {
@@ -204,6 +206,14 @@ export class ActionRunner {
         )
         return
       }
+      case 'setMappingGroup': {
+        // Deferred: switching releases instances and re-asserts alert levels
+        // through the bus, which must not happen half-way through the engine
+        // walking the mappings for the event that got us here.
+        const mappingName = mapping?.name ?? '?'
+        queueMicrotask(() => this.deps.setMappingGroup(action.groupId, { mappingName }))
+        return
+      }
       case 'thoriumMutation': {
         const targets = this.resolveTargets('event', event).filter((t) => t.thoriumId)
         if (targets.length === 0)
@@ -240,6 +250,19 @@ export class ActionRunner {
       )
       return
     }
+    const base = this.levelKey('level', action, mapping, action.source.path)
+    if (
+      action.idle?.ignoreInitialZero &&
+      (data as { initial?: unknown }).initial === true &&
+      input <= action.source.inMin
+    ) {
+      // Thorium creates every simulator at intensity 0 and replays it on
+      // connect, so this is "never set", not "the FD chose darkness": let go of
+      // the live level and the floor from `applyFloors` shows through.
+      log.debug(`"${mapping?.name ?? '?'}": initial ${input} treated as no signal`)
+      this.releaseLevel(base, action, event)
+      return
+    }
     this.applyLevel(
       {
         // Identity has to be stable across events but distinct per simulator, so
@@ -247,7 +270,7 @@ export class ActionRunner {
         // instance. It deliberately ignores the ranges, curve, fade and label,
         // so editing those moves the running level rather than leaving a stale
         // one behind.
-        base: this.levelKey('level', action, mapping, action.source.path),
+        base,
         value: scaleLevel(input, action.source),
         fadeMs: resolveFadeMs(action.fade, data),
         holdMs: null,
@@ -350,6 +373,7 @@ export class ActionRunner {
   ): void {
     const { base, value, fadeMs, holdMs, nextStage = null, label } = level
     const layerId = action.layerId ?? LAYER_IDS.scene
+    const origin = { mappingId: mapping?.id, eventId: event?.id }
 
     if (action.addressing === 'absolute') {
       const universe = action.universe ?? this.deps.profile().outputs[0]?.universe ?? 1
@@ -361,7 +385,8 @@ export class ActionRunner {
         fadeMs,
         holdMs,
         nextStage,
-        label
+        label,
+        origin
       })
       warnings.forEach((w) => this.deps.warn(w))
       return
@@ -389,10 +414,96 @@ export class ActionRunner {
         nextStage,
         label,
         simulatorKey: t.profile.id,
-        simulatorName: t.profile.name
+        simulatorName: t.profile.name,
+        origin
       })
       warnings.forEach((w) => this.deps.warn(w))
     }
+  }
+
+  /** Let go of a live level (every simulator the action resolves to for this event). */
+  private releaseLevel(
+    base: string,
+    action: Extract<Action, { kind: 'setLevel' | 'holdLevel' }>,
+    event: AppEvent | null
+  ): void {
+    if (action.addressing === 'absolute') {
+      this.deps.compositor.release((i) => i.levelKey === base)
+      return
+    }
+    const keys = new Set(
+      this.resolveTargets(action.target, event)
+        .filter((t) => t.profile)
+        .map((t) => `${base}:${t.profile!.id}`)
+    )
+    this.deps.compositor.release((i) => i.levelKey != null && keys.has(i.levelKey))
+  }
+
+  /**
+   * Hold every `setLevel` action's "no signal" value on the Base layer, so its
+   * channels sit at a working light until a live value arrives and fall back
+   * to it when the live level is released (unassigned, scope change, release
+   * all). The live level is on a higher layer, so a deliberate 0 still wins.
+   *
+   * Idempotent: call it whenever the config, the active group or the set of
+   * simulators changes. Floors no longer wanted are released.
+   */
+  applyFloors(isLive: (m: Mapping) => boolean): void {
+    const profile = this.deps.profile()
+    const reg = this.deps.registry
+    const wanted = new Set<string>()
+    for (const mapping of profile.mappings) {
+      if (!isLive(mapping)) continue
+      for (const action of mapping.actions) {
+        if (action.kind !== 'setLevel' || !action.idle) continue
+        const base = `floor:${this.levelKey('level', action, mapping, action.source.path)}`
+        const label = `${action.label || `Level ${action.source.path}`} (no signal)`
+        const spec = {
+          layerId: LAYER_IDS.base,
+          value: action.idle.value,
+          fadeMs: 0,
+          label,
+          origin: { mappingId: mapping.id, floor: true }
+        }
+        if (action.addressing === 'absolute') {
+          wanted.add(base)
+          const universe = action.universe ?? profile.outputs[0]?.universe ?? 1
+          const { warnings } = this.deps.compositor.setLevel(base, {
+            ...spec,
+            universe,
+            channels: action.channels
+          })
+          warnings.forEach((w) => this.deps.warn(w))
+          continue
+        }
+        // No event to resolve against: a floor covers every profile the
+        // mapping could ever drive.
+        const named =
+          typeof action.target === 'object'
+            ? [action.target.simulatorName]
+            : mapping.simulatorNames.length
+              ? mapping.simulatorNames
+              : null
+        const profiles = named
+          ? named.map((n) => reg.profileByName(n)).filter((p): p is SimulatorProfile => !!p)
+          : reg.allProfiles()
+        for (const p of profiles) {
+          const key = `${base}:${p.id}`
+          wanted.add(key)
+          const { warnings } = this.deps.compositor.setLevel(key, {
+            ...spec,
+            universe: p.universe,
+            channels: action.channels.map((ch) => p.baseAddress + ch),
+            simulatorKey: p.id,
+            simulatorName: p.name
+          })
+          warnings.forEach((w) => this.deps.warn(w))
+        }
+      }
+    }
+    this.deps.compositor.release(
+      (i) => i.origin.floor === true && !(i.levelKey != null && wanted.has(i.levelKey))
+    )
   }
 
   describe(action: Action): string {
@@ -419,6 +530,8 @@ export class ActionRunner {
         return `Publish ${action.topic}`
       case 'thoriumMutation':
         return `Thorium: ${action.mutation.kind}`
+      case 'setMappingGroup':
+        return `Switch to group "${this.deps.profile().mappingGroups.find((g) => g.id === action.groupId)?.name ?? '?'}"`
     }
   }
 }

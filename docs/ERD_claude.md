@@ -209,7 +209,14 @@ export interface Profile {
   layers: Layer[];
   scenes: Scene[];
   mappings: Mapping[];
+  mappingGroups: MappingGroup[];     // schema v8: switchable sets of mappings (§5.1b)
   grandMaster: number;               // 0–1, persisted so it survives restarts
+}
+
+export interface MappingGroup {
+  id: string;
+  name: string;
+  color: string;                     // hex, for the status-bar switcher and badges
 }
 
 export interface ThoriumSettings {
@@ -314,7 +321,8 @@ export type Action =
                 curve: 'linear' | 'square' | 'sqrt'; invert: boolean };
       fade: { kind: 'none' } | { kind: 'fixed'; ms: number }
           | { kind: 'fromEvent'; path: string; fallbackMs: number };
-      layerId: string | null; label: string }
+      layerId: string | null; label: string;
+      idle: { value: number; ignoreInitialZero: boolean } | null }   // schema v8: "no signal" floor (§6.3b)
   | { kind: 'holdLevel'; target: 'event' | 'all' | { simulatorName: string };
       addressing: 'absolute' | 'relative'; universe?: number; channels: number[];
       value: number;                                  // 0–255, set here — the event only supplies the time
@@ -328,7 +336,8 @@ export type Action =
   | { kind: 'thoriumMutation';
       mutation: { kind: 'triggerMacro'; macroName: string }
               | { kind: 'setAlertLevel'; level: '1' | '2' | '3' | '4' | '5' | 'p' }
-              | { kind: 'notify'; title: string; body: string; color: string } };
+              | { kind: 'notify'; title: string; body: string; color: string } }
+  | { kind: 'setMappingGroup'; groupId: string };     // schema v8: make another mapping group active
 
 export interface Mapping {
   id: string;
@@ -339,6 +348,7 @@ export interface Mapping {
   simulatorNames: string[];          // schema v4 (was per-trigger): only events from these simulators; empty = any in scope
   actions: Action[];
   debounceMs: number;                // 0 = none
+  groupIds: string[];                // schema v8: fires only while one of these groups is active; empty = every group
   notes: string;
 }
 ```
@@ -428,6 +438,35 @@ ends, so a short one is exactly the flash Reduced Effects exists to hold back.
 Direct staff commands (`activateSceneByUser`, blackout, release all, Grand Master, alert override from the UI) never pass through the gate. Events they emit carry `staffOrigin`; Locked lets mappings fired by those through, Reduced still filters them.
 
 Mode state lives in `Services` and is persisted by `main/config/modeState.ts` as `userData/lighting-mode.json` `{ mode, since, day }` (atomic write, outside config.json). `load()` restores it only when `day` is today; it runs in `init()` before any source starts. `setLightingMode(mode, { releaseUncleared, catchUpAlerts })` optionally releases active scenes that aren't cleared (entering Reduced) and re-asserts each in-scope simulator's alert level (moving to a less restrictive mode), then emits `ui.action`/`lightingMode`. `staleDay` is computed per snapshot; nothing switches automatically.
+
+### 5.1b Mapping groups
+
+A profile may define `mappingGroups`; exactly one is active at a time (the first,
+until staff pick another). `RulesEngine.setActiveGroup(id)` recompiles with
+`mappingInGroup()` (`shared/mappingGroups.ts`): a mapping takes part when it is
+enabled and its `groupIds` is empty or contains the active id. With no groups
+defined everything fires, as before. This is how one room carries two looks for
+the same alert levels (purple desks vs pink desks) without swapping profiles.
+
+The active group is operational state, like the lighting mode: persisted by
+`main/config/groupState.ts` in `userData/mapping-group.json`
+`{ byProfile: { [profileId]: { groupId, since } } }`, **no daily reset**.
+`resolveActiveGroup()` falls back to the first group when the saved id is gone.
+
+`Services.setMappingGroup(groupId, by)` — called from the status-bar switcher
+(`mappingGroup.set` IPC), the tray submenu, or a `setMappingGroup` action — saves
+the choice, releases compositor instances whose `origin.mappingId` is no longer
+live (floors and the test layer exempt), re-applies floors, emits
+`mappingGroup` (`ui.action` from staff, `system` from a mapping) and re-asserts
+every in-scope simulator's alert level so the new look appears at once.
+
+The action runs deferred (`queueMicrotask`) so the switch never happens half-way
+through the engine walking mappings for one event. Because re-asserting the alert
+level can fire another switch, mapping-initiated switches are capped at five per
+two seconds (a loop is reported as an error toast); staff switches are never
+limited. `setMappingGroup` is in `gateAction`'s non-lighting set: it changes no
+channel itself, and everything it brings in is gated on its own. The active group
+is published on MQTT as `<base>/mappingGroup`.
 
 ### 5.2 Trigger presets
 
@@ -563,8 +602,10 @@ simulator profile so two ships never fight over one instance.
 A level change crossfades the channel **values** (`fromFrames` → `frames` over
 `valueFadeMs`), not the instance's envelope. Fading the envelope would cross into
 whatever sits on the layer below, which for a dimmer reads as a dip. A brand-new
-level ramps from 0; a change part-way through a fade continues from the value
-currently being output, not from the one the last change was aiming at.
+level ramps from whatever those channels currently show (0 when nothing drives
+them, the floor below when there is one); a change part-way through a fade
+continues from the value currently being output, not from the one the last change
+was aiming at.
 
 Thorium makes the fade ours to run: `lightingFadeLights` sets `lighting.intensity`
 to the *destination* immediately and publishes `transitionDuration` for its own
@@ -576,6 +617,35 @@ rather than sitting at 0.
 Levels are ordinary compositor instances otherwise: layer priority, blackout,
 grand master, `channelRange` output guards, `releaseLayer` / `releaseAll` and
 scope-change releases all apply unchanged. Driving a released level brings it back.
+
+**No-signal floor (`idle`).** Thorium creates every simulator at intensity 0
+(`server/classes/lighting.ts`), so a follow alone leaves a fresh flight — and the
+room before Thorium answers — fully dark. A `setLevel` with `idle` gets a second,
+config-owned instance:
+
+```
+ActionRunner.applyFloors(isLive)      # idempotent; Services calls it in init() before any source starts,
+                                      # after every config change and after a group switch
+  for each live mapping, each setLevel with idle:
+    key = "floor:" + <level key> (+ ":<profileId>" per profile when relative)
+    compositor.setLevel(key, { layerId: Base, value: idle.value, fadeMs: 0, origin: { floor: true } })
+  release floors whose key is no longer wanted
+```
+
+Relative floors cover every profile the mapping could drive (`{simulatorName}`
+target → that one, else `mapping.simulatorNames`, else all profiles), since there
+is no event to resolve against. The live level sits on its own higher layer, so
+any live value — including a deliberate 0 — wins; when the live level is released
+(unassigned, scope change, release all) the floor shows through. Floors are
+exempt from `releaseAll`, `releaseLayer`, the per-simulator scope release and the
+Reduced Effects "turn off uncleared" release. Blackout still forces 0 and the
+Grand Master still scales them.
+
+With `idle.ignoreInitialZero` (default on), an `initial: true` event whose input
+is at or below `source.inMin` **releases** the live level instead of writing it:
+the first read after a connect is Thorium's default, not the FD choosing darkness.
+Trade-off, accepted: a reconnect after the FD deliberately set 0 brings the floor
+back up. Floor instances report `floor: true` in `ActiveSceneSummary`.
 
 ### 6.3c Timed channel holds (`holdLevel`)
 

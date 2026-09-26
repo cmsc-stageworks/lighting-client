@@ -11,10 +11,12 @@ import {
   localDayKey,
   type LightingMode
 } from '@shared/lightingMode'
+import { resolveActiveGroup } from '@shared/mappingGroups'
 import { eqIgnoreCase } from '@shared/utils'
 import { ConfigStore, type ConfigChange } from './config/store'
 import { SecretVault } from './config/secrets'
 import { ModeStateStore, type ModeState } from './config/modeState'
+import { GroupStateStore } from './config/groupState'
 import { Compositor } from './core/compositor/compositor'
 import { Scheduler } from './core/compositor/scheduler'
 import { EventBus } from './core/eventBus'
@@ -75,6 +77,9 @@ export class Services extends EventEmitter {
   private alertOverrides = new Map<string, string>()
   private modeStore: ModeStateStore
   private modeState: ModeState
+  private groupStore: GroupStateStore
+  /** When recent mapping-initiated group switches happened, to stop a switch loop. */
+  private mappingGroupSwitches: number[] = []
   private heldBack: { count: number; last: { ts: number; text: string } | null } = {
     count: 0,
     last: null
@@ -94,6 +99,7 @@ export class Services extends EventEmitter {
     this.updater.on('changed', () => this.scheduleSnapshot())
     this.modeStore = new ModeStateStore(userData)
     this.modeState = this.modeStore.create('normal')
+    this.groupStore = new GroupStateStore(userData)
     this.log = new EventLog(2000, (batch) => this.emit('events', batch))
     this.runner = new ActionRunner({
       compositor: this.compositor,
@@ -106,7 +112,8 @@ export class Services extends EventEmitter {
         setAlertLevel: (s, l) => this.thorium.setAlertLevel(s, l),
         notify: (s, t, b, c) => this.thorium.notify(s, t, b, c)
       },
-      warn: (m) => this.toast('warn', m)
+      warn: (m) => this.toast('warn', m),
+      setMappingGroup: (id, by) => void this.setMappingGroup(id, 'mapping', by.mappingName)
     })
     this.engine = new RulesEngine(this.runner, {
       mode: () => this.modeState.mode,
@@ -131,6 +138,7 @@ export class Services extends EventEmitter {
     // Before any source starts: a restart mid-mission must not fire a burst of effects.
     const mode = await this.modeStore.load()
     this.modeState = mode.state
+    await this.groupStore.load()
     if (mode.restored)
       this.toast(
         'warn',
@@ -164,7 +172,9 @@ export class Services extends EventEmitter {
         this.registry.profileByName(this.registry.thoriumSimulatorById(simId)?.name ?? '')?.id ??
         null
       this.compositor.release(
-        (i) => i.simulatorId === simId || (profileId != null && i.simulatorId === profileId)
+        (i) =>
+          !i.origin.floor &&
+          (i.simulatorId === simId || (profileId != null && i.simulatorId === profileId))
       )
     })
     this.thorium.on('assignmentLost', (info: { previousFlight: string | null }) => {
@@ -233,6 +243,9 @@ export class Services extends EventEmitter {
     this.store.on('change', (c: ConfigChange) => void this.onConfigChange(c))
 
     await this.outputs.apply(profile.outputs)
+    // Before any source: the room gets its working light as soon as the app is
+    // up, whether or not Thorium ever answers.
+    this.applyFloors()
     this.scheduler.start()
     this.thorium.start()
     this.mqtt.start()
@@ -287,6 +300,15 @@ export class Services extends EventEmitter {
     this.registry.setProfiles(profile.simulators, profile.kind)
     this.registry.setScope(profile.thorium.scope)
     this.engine.setMappings(profile.mappings)
+    this.engine.setActiveGroup(this.activeGroupId(profile))
+  }
+
+  private activeGroupId(profile: Profile = this.store.active()): string | null {
+    return resolveActiveGroup(profile.mappingGroups, this.groupStore.get(profile.id))
+  }
+
+  private applyFloors(): void {
+    this.runner.applyFloors((m) => this.engine.isLive(m))
   }
 
   private async onConfigChange(c: ConfigChange): Promise<void> {
@@ -304,6 +326,7 @@ export class Services extends EventEmitter {
       this.compositor.drop(() => true)
       this.alertOverrides.clear()
     }
+    this.applyFloors()
     this.scheduleSnapshot()
   }
 
@@ -366,6 +389,12 @@ export class Services extends EventEmitter {
         this.engine.unresolved().map((u) => [u.mappingId, { reason: u.reason, fatal: u.fatal }])
       ),
       alertOverrides: overrides,
+      mappingGroup: {
+        activeId: this.activeGroupId(),
+        groups: this.store
+          .active()
+          .mappingGroups.map(({ id, name, color }) => ({ id, name, color }))
+      },
       lightingMode: {
         mode: this.modeState.mode,
         since: this.modeState.since,
@@ -526,7 +555,7 @@ export class Services extends EventEmitter {
     simulatorName: string,
     level: string,
     override: boolean,
-    source: 'ui' | 'mqtt'
+    source: 'ui' | 'mqtt' | 'system'
   ): void {
     const sim = this.registry.thoriumSimulatorByName(simulatorName)
     this.bus.emit({
@@ -571,7 +600,10 @@ export class Services extends EventEmitter {
           .scenes.filter((s) => s.reducedEffectsCleared)
           .map((s) => s.id)
       )
-      released = this.compositor.release((i) => !i.origin.test && !cleared.has(i.sceneId))
+      // A no-signal floor is a steady working light — exactly what Reduced wants to keep.
+      released = this.compositor.release(
+        (i) => !i.origin.test && !i.origin.floor && !cleared.has(i.sceneId)
+      )
     }
     log.info(`lighting mode ${previous} → ${mode} (by ${by})`)
     this.bus.emit({
@@ -581,13 +613,8 @@ export class Services extends EventEmitter {
       name: 'lightingMode',
       data: { mode, previous, by }
     })
-    if (opts.catchUpAlerts && LIGHTING_MODE_RANK[mode] < LIGHTING_MODE_RANK[previous]) {
-      for (const sim of this.registry.inScope()) {
-        const override = this.alertOverrides.get(sim.name)
-        const level = override ?? sim.alertLevel
-        if (level != null) this.reassertAlertLevel(sim.name, level, override != null, 'ui')
-      }
-    }
+    if (opts.catchUpAlerts && LIGHTING_MODE_RANK[mode] < LIGHTING_MODE_RANK[previous])
+      this.reassertAllAlertLevels()
     this.toast(
       mode === 'normal' ? 'info' : 'warn',
       mode === 'normal'
@@ -596,6 +623,76 @@ export class Services extends EventEmitter {
     )
     this.scheduleSnapshot()
     await this.modeStore.save(this.modeState)
+  }
+
+  /** Re-apply every in-scope simulator's current alert level (or override) through the mappings. */
+  private reassertAllAlertLevels(source: 'ui' | 'system' = 'ui'): void {
+    for (const sim of this.registry.inScope()) {
+      const override = this.alertOverrides.get(sim.name)
+      const level = override ?? sim.alertLevel
+      if (level != null) this.reassertAlertLevel(sim.name, level, override != null, source)
+    }
+  }
+
+  /**
+   * Make `groupId` the active mapping group. Looks from mappings that drop out
+   * are released and the current alert levels are re-asserted, so the new
+   * group's alert look shows straight away rather than at the next change.
+   */
+  async setMappingGroup(
+    groupId: string,
+    by: 'ui' | 'tray' | 'mapping',
+    mappingName?: string
+  ): Promise<void> {
+    const profile = this.store.active()
+    const group = profile.mappingGroups.find((g) => g.id === groupId)
+    if (!group) {
+      this.toast('warn', `Mapping group not found${mappingName ? ` (from "${mappingName}")` : ''}`)
+      return
+    }
+    const previous = this.activeGroupId(profile)
+    if (previous === groupId) return
+    if (by === 'mapping') {
+      // Switching re-asserts the alert level, which can fire another switch:
+      // two groups whose alert mappings switch to each other would ping-pong
+      // forever. Staff switches are never limited.
+      const now = Date.now()
+      this.mappingGroupSwitches = this.mappingGroupSwitches.filter((t) => now - t < 2000)
+      if (this.mappingGroupSwitches.length >= 5) {
+        this.toast(
+          'error',
+          `Ignored group switch from "${mappingName ?? '?'}": mappings are switching groups in a loop`
+        )
+        return
+      }
+      this.mappingGroupSwitches.push(now)
+    }
+    await this.groupStore.set(profile.id, groupId)
+    this.engine.setActiveGroup(groupId)
+    const byId = new Map(profile.mappings.map((m) => [m.id, m]))
+    this.compositor.release((i) => {
+      if (i.origin.test || i.origin.floor || !i.origin.mappingId) return false
+      const m = byId.get(i.origin.mappingId)
+      return m != null && !this.engine.isLive(m)
+    })
+    this.applyFloors()
+    log.info(`mapping group → ${group.name} (by ${by}${mappingName ? ` "${mappingName}"` : ''})`)
+    this.bus.emit({
+      source: by === 'mapping' ? 'system' : 'ui',
+      ...(by === 'mapping' ? {} : { staffOrigin: true }),
+      type: by === 'mapping' ? 'system' : 'ui.action',
+      name: 'mappingGroup',
+      data: {
+        groupId,
+        groupName: group.name,
+        previous,
+        by,
+        ...(mappingName ? { mappingName } : {})
+      }
+    })
+    this.reassertAllAlertLevels(by === 'mapping' ? 'system' : 'ui')
+    this.toast('info', `Mapping group: ${group.name}`)
+    this.scheduleSnapshot()
   }
 
   /** Confirm a restrictive mode set on an earlier day is still wanted today. */

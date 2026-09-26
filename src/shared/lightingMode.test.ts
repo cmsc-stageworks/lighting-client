@@ -22,7 +22,8 @@ const kinds: GateKind[] = [
   'holdLevel',
   'alertLevel',
   'publishMqtt',
-  'thoriumMutation'
+  'thoriumMutation',
+  'setMappingGroup'
 ]
 
 describe('gateAction', () => {
@@ -39,6 +40,8 @@ describe('gateAction', () => {
       for (const ctx of [auto, staff]) {
         expect(gateAction(mode, { kind: 'publishMqtt' }, ctx)).toBeNull()
         expect(gateAction(mode, { kind: 'thoriumMutation' }, ctx)).toBeNull()
+        // Switching group changes no channel; what it brings in is gated itself.
+        expect(gateAction(mode, { kind: 'setMappingGroup' }, ctx)).toBeNull()
       }
   })
 
@@ -72,7 +75,9 @@ describe('gateAction', () => {
 
   it('Locked holds back every automatic lighting action but lets staff-origin through', () => {
     expect(gateAction('locked', cleared, auto)).toMatch(/Locked/)
-    for (const kind of kinds.filter((k) => k !== 'publishMqtt' && k !== 'thoriumMutation'))
+    for (const kind of kinds.filter(
+      (k) => k !== 'publishMqtt' && k !== 'thoriumMutation' && k !== 'setMappingGroup'
+    ))
       expect(gateAction('locked', { kind }, auto)).toMatch(/Locked/)
     expect(gateAction('locked', notCleared, staff)).toBeNull()
     expect(gateAction('locked', { kind: 'releaseAll' }, staff)).toBeNull()

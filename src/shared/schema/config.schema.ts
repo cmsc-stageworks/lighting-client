@@ -310,6 +310,18 @@ export const LevelFadeSchema = z.discriminatedUnion('kind', [
 ])
 export type LevelFade = z.infer<typeof LevelFadeSchema>
 
+/** What a `setLevel` action holds its channels at while nothing drives them. */
+export const LevelIdleSchema = z.object({
+  value: dmxValue.default(40),
+  /**
+   * Thorium creates every simulator at intensity 0 and replays it on connect,
+   * so a first reading at the bottom of the input range means "never set", not
+   * "the FD chose darkness". A later change to 0 still goes dark.
+   */
+  ignoreInitialZero: z.boolean().default(true)
+})
+export type LevelIdle = z.infer<typeof LevelIdleSchema>
+
 /** How long a `holdLevel` action keeps its channels up before letting them go. */
 export const LevelHoldSchema = z.discriminatedUnion('kind', [
   /**
@@ -373,7 +385,13 @@ export const ActionSchema = z.discriminatedUnion('kind', [
     fade: LevelFadeSchema.prefault({ kind: 'fromEvent' }),
     layerId: id.nullable().default(null),
     /** Shown on the Dashboard instead of a scene name. */
-    label: z.string().trim().max(60).default('')
+    label: z.string().trim().max(60).default(''),
+    /**
+     * A floor held on the Base layer whenever this level has no live signal
+     * (app just started, Thorium disconnected, client unassigned). Null keeps
+     * the channels at 0 until a value arrives.
+     */
+    idle: LevelIdleSchema.nullable().default(null)
   }),
   /**
    * The mirror of `setLevel`: the *duration* comes off the event and the value
@@ -410,9 +428,22 @@ export const ActionSchema = z.discriminatedUnion('kind', [
     /** Shown on the Dashboard instead of a scene name. */
     label: z.string().trim().max(60).default('')
   }),
-  z.object({ kind: z.literal('thoriumMutation'), mutation: ThoriumMutationActionSchema })
+  z.object({ kind: z.literal('thoriumMutation'), mutation: ThoriumMutationActionSchema }),
+  /** Make another mapping group the active one (see `MappingSchema.groupIds`). */
+  z.object({ kind: z.literal('setMappingGroup'), groupId: id })
 ])
 export type Action = z.infer<typeof ActionSchema>
+
+/**
+ * A switchable set of mappings: staff pick the active group, and only mappings
+ * in that group (plus ungrouped ones) fire — e.g. two looks for the same alert.
+ */
+export const MappingGroupSchema = z.object({
+  id,
+  name,
+  color: hexColor
+})
+export type MappingGroup = z.infer<typeof MappingGroupSchema>
 
 export const MappingSchema = z.object({
   id,
@@ -432,6 +463,11 @@ export const MappingSchema = z.object({
   simulatorNames: z.array(z.string().trim().min(1)).default([]),
   actions: z.array(ActionSchema).default([]),
   debounceMs: z.number().int().min(0).max(600_000).default(0),
+  /**
+   * Mapping groups this mapping belongs to. It only fires while one of them is
+   * the active group; empty = fires in every group.
+   */
+  groupIds: z.array(id).default([]),
   notes: z.string().max(2000).default('')
 })
 export type Mapping = z.infer<typeof MappingSchema>
@@ -451,6 +487,7 @@ export const ProfileSchema = z.object({
   layers: z.array(LayerSchema).default([]),
   scenes: z.array(SceneSchema).default([]),
   mappings: z.array(MappingSchema).default([]),
+  mappingGroups: z.array(MappingGroupSchema).default([]),
   grandMaster: z.number().min(0).max(1).default(1)
 })
 export type Profile = z.infer<typeof ProfileSchema>
@@ -463,14 +500,15 @@ export const AppConfigSchema = z.object({
 })
 export type AppConfig = z.infer<typeof AppConfigSchema>
 
-/** Partial import/export document (scenes, mappings, simulators, layers). */
+/** Partial import/export document (scenes, mappings, simulators, layers, mapping groups). */
 export const PartialConfigSchema = z.object({
   kind: z.literal('partial'),
   schemaVersion: z.literal(CONFIG_SCHEMA_VERSION),
   scenes: z.array(SceneSchema).default([]),
   mappings: z.array(MappingSchema).default([]),
   simulators: z.array(SimulatorProfileSchema).default([]),
-  layers: z.array(LayerSchema).default([])
+  layers: z.array(LayerSchema).default([]),
+  mappingGroups: z.array(MappingGroupSchema).default([])
 })
 export type PartialConfig = z.infer<typeof PartialConfigSchema>
 
@@ -481,6 +519,7 @@ export type PartialConfig = z.infer<typeof PartialConfigSchema>
 export function validateProfileReferences(profile: Profile): string[] {
   const errors: string[] = []
   const layerIds = new Set(profile.layers.map((l) => l.id))
+  const groupIds = new Set(profile.mappingGroups.map((g) => g.id))
   const sceneIds = new Set(profile.scenes.map((s) => s.id))
 
   const dup = (items: { name: string }[], what: string): void => {
@@ -496,6 +535,7 @@ export function validateProfileReferences(profile: Profile): string[] {
   dup(profile.outputs, 'output')
   dup(profile.simulators, 'simulator')
   dup(profile.layers, 'layer')
+  dup(profile.mappingGroups, 'mapping group')
 
   for (const s of profile.scenes) {
     if (!layerIds.has(s.defaultLayerId)) errors.push(`Scene "${s.name}" references a missing layer`)
@@ -505,7 +545,11 @@ export function validateProfileReferences(profile: Profile): string[] {
     }
   }
   for (const m of profile.mappings) {
+    if (m.groupIds.some((g) => !groupIds.has(g)))
+      errors.push(`Mapping "${m.name}" references a missing mapping group`)
     for (const a of m.actions) {
+      if (a.kind === 'setMappingGroup' && !groupIds.has(a.groupId))
+        errors.push(`Mapping "${m.name}" switches to a missing mapping group`)
       if ((a.kind === 'activateScene' || a.kind === 'releaseScene') && !sceneIds.has(a.sceneId))
         errors.push(`Mapping "${m.name}" references a missing scene`)
       if (a.kind === 'activateScene' && a.layerId && !layerIds.has(a.layerId))

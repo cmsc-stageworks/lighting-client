@@ -38,6 +38,7 @@ function mapping(id: string, actions: Action[]): Mapping {
     simulatorNames: [],
     actions,
     debounceMs: 0,
+    groupIds: [],
     notes: ''
   }
 }
@@ -149,5 +150,40 @@ describe('RulesEngine lighting mode gate', () => {
     expect(r.heldBack).toHaveLength(1)
     expect(t.run).not.toHaveBeenCalled()
     expect(t.heldBack).toEqual([])
+  })
+})
+
+describe('RulesEngine mapping groups', () => {
+  const grouped = (id: string, groupIds: string[]): Mapping => ({
+    ...mapping(id, [activate('safe')]),
+    groupIds
+  })
+
+  it('fires every mapping while no group is active', () => {
+    const { engine, run } = setup([grouped('a', ['g1']), grouped('b', ['g2'])])
+    engine.onEvent(alertEvent())
+    expect(run.mock.calls.map((c) => c[0].id)).toEqual(['a', 'b'])
+  })
+
+  it('fires only the active group plus ungrouped mappings', () => {
+    const { engine, run } = setup([
+      grouped('purple', ['g1']),
+      grouped('pink', ['g2']),
+      grouped('always', [])
+    ])
+    engine.setActiveGroup('g2')
+    engine.onEvent(alertEvent())
+    expect(run.mock.calls.map((c) => c[0].id)).toEqual(['pink', 'always'])
+
+    run.mockClear()
+    engine.setActiveGroup('g1')
+    engine.onEvent(alertEvent())
+    expect(run.mock.calls.map((c) => c[0].id)).toEqual(['purple', 'always'])
+  })
+
+  it('leaves out-of-group mappings out of a dry run too', () => {
+    const { engine } = setup([grouped('purple', ['g1']), grouped('pink', ['g2'])])
+    engine.setActiveGroup('g1')
+    expect(engine.evaluate(alertEvent()).map((r) => r.mapping.id)).toEqual(['purple'])
   })
 })

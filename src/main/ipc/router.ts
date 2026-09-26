@@ -169,6 +169,9 @@ export function registerIpc(
     (mode, opts) => s.setLightingMode(mode, opts, 'ui')
   )
   handle('lightingMode.keepForToday', null, () => s.keepLightingModeForToday())
+  handle('mappingGroup.set', z.tuple([z.string().min(1)]), (groupId) =>
+    s.setMappingGroup(groupId, 'ui')
+  )
   handle('dmx.subscribeUniverse', z.tuple([num.int().min(1), z.boolean()]), (u, on) =>
     s.subscribeUniverse(u, on)
   )

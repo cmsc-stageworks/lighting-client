@@ -81,6 +81,8 @@ export class StatusPublisher {
       mode: snap.lightingMode.mode,
       since: new Date(snap.lightingMode.since).toISOString()
     })
+    const group = snap.mappingGroup.groups.find((g) => g.id === snap.mappingGroup.activeId)
+    this.put('mappingGroup', { id: group?.id ?? null, name: group?.name ?? null })
   }
 
   publishEvent(ev: AppEvent): void {

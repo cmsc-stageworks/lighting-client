@@ -22,6 +22,7 @@ import {
 import { TriggerPicker } from './TriggerPicker'
 import { ConditionBuilder } from './ConditionBuilder'
 import { ActionsEditor } from './ActionsEditor'
+import { GroupChips } from './MappingGroups'
 
 /** Simulator chips: "Any" or a multi-select of known names (profiles ∪ live flight ∪ already used). */
 export function SimulatorChips({
@@ -201,6 +202,7 @@ export function MappingEditor({
     [profile.mappings]
   )
   const sims = mapping.simulatorNames
+  const groupCount = profile.mappingGroups.length
   const triggers = mapping.triggers
   // Only one trigger is expanded at a time so a multi-trigger mapping stays readable;
   // a single-trigger mapping looks exactly like it always did.
@@ -280,6 +282,20 @@ export function MappingEditor({
               : `Only events from ${sims.join(', ')} match. Events with no simulator (flight-level, MQTT) never match a simulator-restricted mapping.`}
           </div>
         </div>
+        {groupCount > 0 && (
+          <div className="mt-4 pt-4 border-t border-border">
+            <div className="field-label">Mapping groups</div>
+            <GroupChips
+              value={mapping.groupIds}
+              onChange={(ids) => onChange({ ...mapping, groupIds: ids })}
+            />
+            <div className="text-[12px] text-faint mt-2">
+              {mapping.groupIds.length === 0
+                ? 'Fires whichever group is active.'
+                : 'Only fires while one of these groups is the active group.'}
+            </div>
+          </div>
+        )}
       </Card>
 
       <Card>

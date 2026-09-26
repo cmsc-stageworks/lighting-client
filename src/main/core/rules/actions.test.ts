@@ -52,6 +52,7 @@ const setLevel = (over: Partial<Extract<Action, { kind: 'setLevel' }>> = {}): Ac
   fade: { kind: 'fromEvent', path: 'transitionDuration', fallbackMs: 0 },
   layerId: null,
   label: 'House',
+  idle: null,
   ...over
 })
 
@@ -93,12 +94,14 @@ const mapping: Mapping = {
   simulatorNames: [],
   actions: [],
   debounceMs: 0,
+  groupIds: [],
   notes: ''
 }
 
 // eslint-disable-next-line @typescript-eslint/explicit-function-return-type
-function setup(profiles: SimulatorProfile[] = [magellan]) {
+function setup(profiles: SimulatorProfile[] = [magellan], mappings: Mapping[] = []) {
   let now = 1000
+  const groupSwitches: { groupId: string; mappingName: string }[] = []
   const compositor = new Compositor(() => now)
   compositor.setLayers(seedLayers())
   compositor.setCarriedUniverses([10])
@@ -121,19 +124,27 @@ function setup(profiles: SimulatorProfile[] = [magellan]) {
     registry,
     bus: { emit: () => undefined } as unknown as EventBus,
     profile: () =>
-      ({ scenes: [], layers: seedLayers(), outputs: [{ universe: 7 }] }) as unknown as Profile,
+      ({
+        scenes: [],
+        layers: seedLayers(),
+        outputs: [{ universe: 7 }],
+        mappings,
+        mappingGroups: [{ id: 'g2', name: 'Pink', color: '#ff00ff' }]
+      }) as unknown as Profile,
     mqttPublish: () => undefined,
     thorium: {
       triggerMacro: async () => true,
       setAlertLevel: async () => undefined,
       notify: async () => undefined
     },
-    warn: (w) => warnings.push(w)
+    warn: (w) => warnings.push(w),
+    setMappingGroup: (groupId, by) => groupSwitches.push({ groupId, ...by })
   })
   return {
     runner,
     compositor,
     warnings,
+    groupSwitches,
     advance: (ms: number) => {
       now += ms
       compositor.tick()
@@ -415,5 +426,130 @@ describe('ActionRunner holdLevel fallback stage', () => {
     expect(t.warnings).toHaveLength(2)
     expect(t.warnings[0]).toMatch(/no duration at "duration"/)
     expect(t.warnings[1]).toMatch(/no duration at "cooldown"/)
+  })
+})
+
+describe('ActionRunner setLevel "no signal" floor', () => {
+  const idle = { value: 40, ignoreInitialZero: true }
+  const withIdle = (action: Action): Mapping => ({ ...mapping, actions: [action] })
+  const all = (): boolean => true
+
+  it('holds the idle value on the Base layer before any event', () => {
+    const a = setLevel({ idle })
+    const t = setup([magellan, cassini], [withIdle(a)])
+    t.runner.applyFloors(all)
+    const f = t.compositor.frame(10)
+    expect(f.values[100]).toBe(40)
+    expect(f.values[200]).toBe(40)
+    const floors = t.compositor.getInstances().filter((i) => i.origin.floor)
+    expect(floors).toHaveLength(2)
+    expect(floors.every((i) => i.layerId === LAYER_IDS.base)).toBe(true)
+  })
+
+  it('only floors the simulators the mapping is limited to', () => {
+    const a = setLevel({ idle })
+    const t = setup([magellan, cassini], [{ ...withIdle(a), simulatorNames: ['Cassini'] }])
+    t.runner.applyFloors(all)
+    const f = t.compositor.frame(10)
+    expect(f.values[100]).toBe(0)
+    expect(f.values[200]).toBe(40)
+  })
+
+  it('is idempotent and drops floors that are no longer configured', () => {
+    const a = setLevel({ idle })
+    const mappings = [withIdle(a)]
+    const t = setup([magellan], mappings)
+    t.runner.applyFloors(all)
+    t.runner.applyFloors(all)
+    expect(t.compositor.getInstances().filter((i) => i.origin.floor)).toHaveLength(1)
+    t.runner.applyFloors(() => false)
+    t.advance(1)
+    expect(t.compositor.getInstances().filter((i) => i.origin.floor)).toHaveLength(0)
+    expect(t.compositor.frame(10).values[100]).toBe(0)
+  })
+
+  it("treats Thorium's initial 0 as no signal and leaves the floor showing", async () => {
+    const a = setLevel({ idle })
+    const t = setup([magellan], [withIdle(a)])
+    t.runner.applyFloors(all)
+    await t.runner.runOne(a, intensityEvent({ data: { intensity: 0, initial: true } }), mapping)
+    expect(t.compositor.frame(10).values[100]).toBe(40)
+  })
+
+  it('a deliberate change to 0 still goes fully dark', async () => {
+    const a = setLevel({ idle })
+    const t = setup([magellan], [withIdle(a)])
+    t.runner.applyFloors(all)
+    await t.runner.runOne(a, intensityEvent({ data: { intensity: 1, initial: true } }), mapping)
+    expect(t.compositor.frame(10).values[100]).toBe(255)
+    await t.runner.runOne(a, intensityEvent({ data: { intensity: 0, initial: false } }), mapping)
+    expect(t.compositor.frame(10).values[100]).toBe(0)
+  })
+
+  it('a reconnect reading 0 lets the live level go back to the floor', async () => {
+    const a = setLevel({ idle })
+    const t = setup([magellan], [withIdle(a)])
+    t.runner.applyFloors(all)
+    await t.runner.runOne(a, intensityEvent({ data: { intensity: 0, initial: false } }), mapping)
+    expect(t.compositor.frame(10).values[100]).toBe(0)
+    await t.runner.runOne(a, intensityEvent({ data: { intensity: 0, initial: true } }), mapping)
+    t.advance(1)
+    expect(t.compositor.frame(10).values[100]).toBe(40)
+  })
+
+  it('honours ignoreInitialZero: false', async () => {
+    const a = setLevel({ idle: { value: 40, ignoreInitialZero: false } })
+    const t = setup([magellan], [withIdle(a)])
+    t.runner.applyFloors(all)
+    await t.runner.runOne(a, intensityEvent({ data: { intensity: 0, initial: true } }), mapping)
+    expect(t.compositor.frame(10).values[100]).toBe(0)
+  })
+
+  it('a new live level fades up from the floor, not from black', async () => {
+    const a = setLevel({ idle })
+    const t = setup([magellan], [withIdle(a)])
+    t.runner.applyFloors(all)
+    await t.runner.runOne(
+      a,
+      intensityEvent({ data: { intensity: 1, transitionDuration: 1000 } }),
+      mapping
+    )
+    expect(t.compositor.frame(10).values[100]).toBe(40)
+    t.advance(500)
+    expect(t.compositor.frame(10).values[100]).toBe(148)
+  })
+
+  it('survives release all and releasing the Base layer; blackout still wins', async () => {
+    const a = setLevel({ idle })
+    const t = setup([magellan], [withIdle(a)])
+    t.runner.applyFloors(all)
+    await t.runner.runOne(a, intensityEvent({ data: { intensity: 1 } }), mapping)
+    t.compositor.releaseAll()
+    t.compositor.releaseLayer(LAYER_IDS.base)
+    t.advance(1)
+    expect(t.compositor.frame(10).values[100]).toBe(40)
+    t.compositor.setBlackout(true)
+    expect(t.compositor.frame(10).values[100]).toBe(0)
+  })
+})
+
+describe('ActionRunner setMappingGroup', () => {
+  it('defers the switch until the current event has been handled', async () => {
+    const t = setup()
+    const done = t.runner.runOne(
+      { kind: 'setMappingGroup', groupId: 'g2' },
+      intensityEvent(),
+      mapping
+    )
+    expect(t.groupSwitches).toEqual([])
+    await done
+    expect(t.groupSwitches).toEqual([{ groupId: 'g2', mappingName: 'Follow intensity' }])
+  })
+
+  it('describes the target group by name', () => {
+    const t = setup()
+    expect(t.runner.describe({ kind: 'setMappingGroup', groupId: 'g2' })).toBe(
+      'Switch to group "Pink"'
+    )
   })
 })

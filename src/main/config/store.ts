@@ -242,7 +242,8 @@ export class ConfigStore extends EventEmitter {
       scenes: p.scenes,
       mappings: p.mappings,
       simulators: p.simulators,
-      layers: p.layers
+      layers: p.layers,
+      mappingGroups: p.mappingGroups
     }
     return JSON.stringify(doc, null, 2)
   }
@@ -278,6 +279,7 @@ export class ConfigStore extends EventEmitter {
       count('mappings', active.mappings, parsed.data.mappings)
       count('simulators', active.simulators, parsed.data.simulators)
       count('layers', active.layers, parsed.data.layers)
+      count('mapping groups', active.mappingGroups, parsed.data.mappingGroups)
       const warnings: string[] = []
       if (
         parsed.data.layers.some(
@@ -352,8 +354,24 @@ export class ConfigStore extends EventEmitter {
       }
     }
     const mapScene = (id: string): string => sceneIdMap.get(id) ?? id
+    // Mapping groups: merge by name; remap ids for mappings
+    const groupIdMap = new Map<string, string>()
+    for (const g of partial.mappingGroups) {
+      const existing = active.mappingGroups.find((e) => eqIgnoreCase(e.name, g.name))
+      if (existing) {
+        existing.color = g.color
+        groupIdMap.set(g.id, existing.id)
+      } else {
+        const ng = { ...g, id: active.mappingGroups.some((e) => e.id === g.id) ? uuid() : g.id }
+        active.mappingGroups.push(ng)
+        groupIdMap.set(g.id, ng.id)
+      }
+    }
+    const mapGroup = (id: string): string => groupIdMap.get(id) ?? id
     for (const m of partial.mappings) {
+      const groupIds = m.groupIds.map(mapGroup)
       const actions = m.actions.map((a) => {
+        if (a.kind === 'setMappingGroup') return { ...a, groupId: mapGroup(a.groupId) }
         if (a.kind === 'activateScene')
           return {
             ...a,
@@ -365,12 +383,13 @@ export class ConfigStore extends EventEmitter {
         return a
       })
       const existing = active.mappings.find((e) => eqIgnoreCase(e.name, m.name))
-      if (existing) Object.assign(existing, { ...m, id: existing.id, actions })
+      if (existing) Object.assign(existing, { ...m, id: existing.id, actions, groupIds })
       else
         active.mappings.push({
           ...m,
           id: active.mappings.some((e) => e.id === m.id) ? uuid() : m.id,
-          actions
+          actions,
+          groupIds
         })
     }
     const refErrors = validateProfileReferences(active)

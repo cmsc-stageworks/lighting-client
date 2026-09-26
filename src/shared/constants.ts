@@ -1,4 +1,4 @@
-export const CONFIG_SCHEMA_VERSION = 7
+export const CONFIG_SCHEMA_VERSION = 8
 
 export const DMX_CHANNELS = 512
 export const DMX_MAX_VALUE = 255

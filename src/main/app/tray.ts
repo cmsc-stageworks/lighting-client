@@ -40,6 +40,8 @@ export function statusLines(snap: RuntimeSnapshot): string[] {
     `Outputs: ${outputs.filter((o) => o.state === 'ok').length}/${outputs.length} ok`,
     `Lighting: ${LIGHTING_MODE_INFO[snap.lightingMode.mode].label}`
   ]
+  const group = snap.mappingGroup.groups.find((g) => g.id === snap.mappingGroup.activeId)
+  if (group) lines.push(`Mapping group: ${group.name}`)
   if (snap.update.state === 'ready')
     lines.push(`Update ready to install: ${snap.update.availableVersion}`)
   else if (snap.update.state === 'available')
@@ -133,6 +135,19 @@ export function createTray(services: Services, getWindow: () => BrowserWindow | 
           click: () => void setMode(m)
         }))
       },
+      ...(latest.mappingGroup.groups.length
+        ? [
+            {
+              label: 'Mapping group',
+              submenu: latest.mappingGroup.groups.map((g) => ({
+                label: g.name,
+                type: 'radio' as const,
+                checked: latest.mappingGroup.activeId === g.id,
+                click: () => void services.setMappingGroup(g.id, 'tray')
+              }))
+            }
+          ]
+        : []),
       { type: 'separator' },
       { label: 'Quit', click: () => app.quit() }
     )

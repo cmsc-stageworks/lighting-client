@@ -111,7 +111,7 @@ function ModeDialogBody({ target }: { target: LightingMode }): React.JSX.Element
   const activeUncleared = useMemo(() => {
     const ok = new Set(cleared.map((s) => s.id))
     const names = (snap?.compositor.active ?? [])
-      .filter((a) => !a.releaseStartedAt && !ok.has(a.sceneId))
+      .filter((a) => !a.releaseStartedAt && !a.floor && !ok.has(a.sceneId))
       .map((a) => a.sceneName)
     return [...new Set(names)]
   }, [snap, cleared])

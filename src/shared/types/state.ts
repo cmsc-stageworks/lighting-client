@@ -68,6 +68,8 @@ export interface ActiveSceneSummary {
   kind: 'scene' | 'level'
   /** Current 0–255 target of a level; null for a scene. */
   level: number | null
+  /** A `setLevel` "no signal" floor, held by the config rather than an event. */
+  floor: boolean
 }
 
 export interface CompositorRuntime {
@@ -100,7 +102,14 @@ export interface RuntimeSnapshot {
   unresolvedMappings: Record<string, { reason: string; fatal: boolean }>
   alertOverrides: Record<string, string>
   lightingMode: LightingModeRuntime
+  mappingGroup: MappingGroupRuntime
   update: UpdateStatus
+}
+
+/** Mapping groups of the active profile and which one is live (null = no groups). */
+export interface MappingGroupRuntime {
+  activeId: string | null
+  groups: { id: string; name: string; color: string }[]
 }
 
 /**
