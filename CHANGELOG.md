@@ -1,3 +1,10 @@
+# [1.6.0](https://github.com/cmsc-stageworks/lighting-client/compare/v1.5.0...v1.6.0) (2026-11-14)
+
+
+### Features
+
+* added ability to add a delay to mappings ([39536d1](https://github.com/cmsc-stageworks/lighting-client/commit/39536d134dbc81e0d960b55b4ab12fc35fe1a2ab))
+
 # [1.5.0](https://github.com/cmsc-stageworks/lighting-client/compare/v1.4.0...v1.5.0) (2026-11-14)
 
 
