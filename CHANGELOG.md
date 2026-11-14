@@ -1,3 +1,10 @@
+# [1.5.0](https://github.com/cmsc-stageworks/lighting-client/compare/v1.4.0...v1.5.0) (2026-11-14)
+
+
+### Features
+
+* random-value selection ([7cfb225](https://github.com/cmsc-stageworks/lighting-client/commit/7cfb2252250e84a4cdd32a5a39468eb791ded1c0))
+
 # [1.4.0](https://github.com/cmsc-stageworks/lighting-client/compare/v1.3.0...v1.4.0) (2026-09-26)
 
 
