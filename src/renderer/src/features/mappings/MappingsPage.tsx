@@ -148,6 +148,7 @@ function mappingFromEvent(e: AppEvent, firstSceneId: string | undefined): Mappin
         ]
       : [],
     debounceMs: 0,
+    delayMs: 0,
     groupIds: [],
     notes: `Created from an event seen at ${new Date(e.ts).toLocaleTimeString()}.`
   }
@@ -286,6 +287,7 @@ export function MappingsPage(): React.JSX.Element {
           ]
         : [],
       debounceMs: 0,
+      delayMs: 0,
       groupIds: mgFilter && mgFilter !== ANY ? [mgFilter] : [],
       notes: ''
     }

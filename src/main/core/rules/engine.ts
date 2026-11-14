@@ -34,6 +34,7 @@ export class RulesEngine {
   private refData: ReferenceData | null = null
   private mappings: Mapping[] = []
   private activeGroupId: string | null = null
+  private pending = new Set<ReturnType<typeof setTimeout>>()
 
   constructor(
     private runner: ActionRunner,
@@ -70,7 +71,14 @@ export class RulesEngine {
   setActiveGroup(groupId: string | null): void {
     if (groupId === this.activeGroupId) return
     this.activeGroupId = groupId
+    this.cancelPending()
     this.recompile()
+  }
+
+  /** Drop every delayed run that has not fired yet (group switch, shutdown). */
+  cancelPending(): void {
+    for (const t of this.pending) clearTimeout(t)
+    this.pending.clear()
   }
 
   /** Whether a mapping can currently fire (enabled and in the active group). */
@@ -158,10 +166,30 @@ export class RulesEngine {
         mappingId: mapping.id,
         mappingName: mapping.name,
         actions: allowed.map((a) => this.runner.describe(a)),
-        ...(heldBack.length ? { heldBack } : {})
+        ...(heldBack.length ? { heldBack } : {}),
+        ...(mapping.delayMs > 0 ? { delayedMs: mapping.delayMs } : {})
       })
-      void this.runner.run(mapping, event, allowed)
+      if (mapping.delayMs > 0) this.runLater(mapping, event)
+      else void this.runner.run(mapping, event, allowed)
     }
+  }
+
+  /**
+   * Run a mapping's actions after its delay. Liveness and the lighting mode are
+   * judged again when the timer fires, not when the event arrived: the mapping
+   * may have been edited, disabled or switched out, and staff may have moved to
+   * Reduced/Locked in the meantime.
+   */
+  private runLater(mapping: Mapping, event: AppEvent): void {
+    const timer = setTimeout(() => {
+      this.pending.delete(timer)
+      const live = this.compiled.find((c) => c.mapping.id === mapping.id)
+      if (!live) return
+      const { allowed, heldBack } = this.gateActions(live.mapping, event)
+      if (heldBack.length) this.gate.onHeldBack(`${live.mapping.name} — ${heldBack[0].reason}`)
+      if (allowed.length) void this.runner.run(live.mapping, event, allowed)
+    }, mapping.delayMs)
+    this.pending.add(timer)
   }
 
   /** Dry-run: which mappings would match and what the lighting mode would allow (no actions, no stats). */

@@ -261,6 +261,15 @@ export function MappingEditor({
               className="!w-32"
             />
           </Field>
+          <Field label="Delay (ms)" hint="Wait before the actions run">
+            <NumberInput
+              value={mapping.delayMs}
+              min={0}
+              step={500}
+              onChange={(v) => onChange({ ...mapping, delayMs: v })}
+              className="!w-32"
+            />
+          </Field>
           <Field label="Enabled">
             <div className="h-10 flex items-center">
               <Switch

@@ -38,6 +38,7 @@ function mapping(id: string, actions: Action[]): Mapping {
     simulatorNames: [],
     actions,
     debounceMs: 0,
+    delayMs: 0,
     groupIds: [],
     notes: ''
   }
@@ -185,5 +186,59 @@ describe('RulesEngine mapping groups', () => {
     const { engine } = setup([grouped('purple', ['g1']), grouped('pink', ['g2'])])
     engine.setActiveGroup('g1')
     expect(engine.evaluate(alertEvent()).map((r) => r.mapping.id)).toEqual(['purple'])
+  })
+})
+
+describe('RulesEngine delay', () => {
+  const delayed = (ms: number): Mapping => ({ ...mapping('d', [activate('safe')]), delayMs: ms })
+
+  it('holds actions until the delay has passed', () => {
+    vi.useFakeTimers()
+    try {
+      const t = setup([delayed(2000)])
+      const ev = alertEvent()
+      t.engine.onEvent(ev)
+      expect(ev.matchedMappingIds).toEqual(['d'])
+      expect(ev.trace?.[0].delayedMs).toBe(2000)
+      vi.advanceTimersByTime(1999)
+      expect(t.run).not.toHaveBeenCalled()
+      vi.advanceTimersByTime(1)
+      expect(t.run).toHaveBeenCalledOnce()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('re-gates by the lighting mode when the timer fires', () => {
+    vi.useFakeTimers()
+    try {
+      const t = setup([{ ...delayed(1000), actions: [activate('strobe')] }])
+      t.engine.onEvent(alertEvent())
+      t.setMode('reduced')
+      vi.advanceTimersByTime(1000)
+      expect(t.run).not.toHaveBeenCalled()
+      expect(t.heldBack).toHaveLength(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('drops a pending run when the mapping is removed, or the group switches', () => {
+    vi.useFakeTimers()
+    try {
+      const a = setup([delayed(1000)])
+      a.engine.onEvent(alertEvent())
+      a.engine.setMappings([])
+      vi.advanceTimersByTime(1000)
+      expect(a.run).not.toHaveBeenCalled()
+
+      const b = setup([delayed(1000)])
+      b.engine.onEvent(alertEvent())
+      b.engine.setActiveGroup('other')
+      vi.advanceTimersByTime(1000)
+      expect(b.run).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

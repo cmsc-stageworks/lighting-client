@@ -63,6 +63,22 @@ describe('ConfigStore', () => {
     await rm(dir3, { recursive: true, force: true })
   })
 
+  it('loads a config saved before mapping delays existed, with delayMs defaulting to 0', async () => {
+    const dir4 = await mkdtemp(join(tmpdir(), 'cmsc-store-nodelay-'))
+    const raw = structuredClone(seedConfig('old-host')) as {
+      profiles: { mappings: Record<string, unknown>[] }[]
+    }
+    for (const prof of raw.profiles) for (const m of prof.mappings) delete m.delayMs
+    await writeFile(join(dir4, 'config.json'), JSON.stringify(raw), 'utf8')
+    const store4 = new ConfigStore(dir4)
+    await store4.load()
+    expect(store4.loadError).toBeNull()
+    const mappings = store4.active().mappings
+    expect(mappings.length).toBeGreaterThan(0)
+    expect(mappings.every((m) => m.delayMs === 0)).toBe(true)
+    await rm(dir4, { recursive: true, force: true })
+  })
+
   it('loads and upgrades an existing v2 config in place, backing up the original', async () => {
     const dir2 = await mkdtemp(join(tmpdir(), 'cmsc-store-v2-'))
     // A believable v2 document: schemaVersion 2, one `trigger` per mapping with the
