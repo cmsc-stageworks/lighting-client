@@ -118,6 +118,16 @@ export const migrations: Migration[] = [
     up(raw) {
       return { ...raw, schemaVersion: 8 }
     }
+  },
+  {
+    // v9: `holdLevel.random` (pick the held value from a range). Defaults to
+    // null (fixed value), so this is additive; the bump stops an older build
+    // from dropping it on save.
+    from: 8,
+    to: 9,
+    up(raw) {
+      return { ...raw, schemaVersion: 9 }
+    }
   }
 ]
 

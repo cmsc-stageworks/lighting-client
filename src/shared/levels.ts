@@ -42,6 +42,20 @@ export function resolveFadeMs(fade: LevelFade, data: unknown): number {
 }
 
 /**
+ * The value a `holdLevel` firing holds: its fixed `value`, or a uniform random
+ * integer in [min, max] when `random` is set. `rand` is injectable for tests.
+ */
+export function pickHoldValue(
+  action: { value: number; random: { min: number; max: number } | null },
+  rand: () => number = Math.random
+): number {
+  if (!action.random) return action.value
+  const lo = Math.min(action.random.min, action.random.max)
+  const hi = Math.max(action.random.min, action.random.max)
+  return clamp(lo + Math.floor(rand() * (hi - lo + 1)), lo, hi)
+}
+
+/**
  * How long a held level stays up. `fromEvent` is the point of the `holdLevel`
  * action: the event says *how long*, the action says *what value*. Returns null
  * for a latch, which is "until something releases it".

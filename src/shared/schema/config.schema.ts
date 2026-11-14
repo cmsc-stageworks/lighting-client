@@ -409,6 +409,16 @@ export const ActionSchema = z.discriminatedUnion('kind', [
     channels: z.array(z.number().int().min(0).max(DMX_CHANNELS)).min(1),
     /** The 0–255 value to hold. Fixed here — the event only supplies the time. */
     value: dmxValue.default(255),
+    /**
+     * When set, every firing picks a uniform integer in [min, max] (the same
+     * number on all channels) instead of using `value`. Only the main value
+     * is random; the fallback stays fixed.
+     */
+    random: z
+      .object({ min: dmxValue.default(0), max: dmxValue.default(255) })
+      .refine((r) => r.min <= r.max, { message: 'Random range: min must not exceed max' })
+      .nullable()
+      .default(null),
     hold: LevelHoldSchema.prefault({ kind: 'fromEvent' }),
     /**
      * Where the channels go when that hold ends, instead of releasing: a second

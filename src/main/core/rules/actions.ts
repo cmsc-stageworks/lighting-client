@@ -8,7 +8,13 @@ import type {
 } from '@shared/types/config'
 import type { AppEvent } from '@shared/types/events'
 import { renderTemplate } from '@shared/templates'
-import { readLevelInput, resolveFadeMs, resolveHoldMs, scaleLevel } from '@shared/levels'
+import {
+  pickHoldValue,
+  readLevelInput,
+  resolveFadeMs,
+  resolveHoldMs,
+  scaleLevel
+} from '@shared/levels'
 import { LAYER_IDS } from '@shared/constants'
 import type { EventBus } from '../eventBus'
 import type { SimulatorRegistry } from '../simulators'
@@ -295,10 +301,18 @@ export class ActionRunner {
     const fadeMs = resolveFadeMs(action.fade, data)
     const holdMs = this.holdMsFor(action.hold, data, event, mapping)
     const fallback = action.fallback
+    const value = pickHoldValue(action)
     this.applyLevel(
       {
-        base: this.levelKey('hold', action, mapping, String(action.value)),
-        value: action.value,
+        // Stable across firings (the range, not the rolled value) so a re-fire
+        // updates the one instance instead of stacking new ones.
+        base: this.levelKey(
+          'hold',
+          action,
+          mapping,
+          action.random ? `rand${action.random.min}-${action.random.max}` : String(action.value)
+        ),
+        value,
         fadeMs,
         holdMs,
         // The second stage is handed to the compositor rather than timed here:
@@ -311,7 +325,7 @@ export class ActionRunner {
               fadeMs
             }
           : null,
-        label: action.label || `Hold ${action.value}`
+        label: action.label || `Hold ${value}`
       },
       action,
       event,
@@ -521,7 +535,7 @@ export class ActionRunner {
       case 'setLevel':
         return `Set ch ${action.channels.join(', ')} from ${action.source.path}`
       case 'holdLevel':
-        return `Hold ch ${action.channels.join(', ')} at ${action.value} for ${describeHold(action.hold)}${
+        return `Hold ch ${action.channels.join(', ')} at ${action.random ? `random ${action.random.min}–${action.random.max}` : action.value} for ${describeHold(action.hold)}${
           action.fallback
             ? `, then ${action.fallback.value} for ${describeHold(action.fallback.hold)}`
             : ''

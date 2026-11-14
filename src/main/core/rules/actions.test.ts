@@ -62,6 +62,7 @@ const holdLevel = (over: Partial<Extract<Action, { kind: 'holdLevel' }>> = {}): 
   addressing: 'relative',
   channels: [0],
   value: 200,
+  random: null,
   hold: { kind: 'fromEvent', path: 'duration', units: 'ms', fallbackMs: 1000 },
   fallback: null,
   fade: { kind: 'none' },
@@ -264,6 +265,20 @@ describe('ActionRunner holdLevel', () => {
     expect(t.compositor.frame(10).values[100]).toBe(200)
     t.advance(2)
     expect(t.compositor.frame(10).values[100]).toBe(0)
+  })
+
+  it('picks a random value in the range and updates the same instance on re-fire', async () => {
+    const t = setup()
+    const spy = vi.spyOn(Math, 'random')
+    const act = holdLevel({ random: { min: 50, max: 60 }, hold: { kind: 'latch' } })
+    spy.mockReturnValue(0)
+    await t.runner.runOne(act, damage({}), mapping)
+    expect(t.compositor.frame(10).values[100]).toBe(50)
+    spy.mockReturnValue(0.9999)
+    await t.runner.runOne(act, damage({}), mapping)
+    expect(t.compositor.frame(10).values[100]).toBe(60)
+    expect(t.compositor.getInstances()).toHaveLength(1)
+    spy.mockRestore()
   })
 
   it('reads the duration in seconds when the action says so', async () => {
