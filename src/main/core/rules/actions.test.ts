@@ -94,6 +94,7 @@ const mapping: Mapping = {
   simulatorNames: [],
   actions: [],
   debounceMs: 0,
+  delayMs: 0,
   groupIds: [],
   notes: ''
 }

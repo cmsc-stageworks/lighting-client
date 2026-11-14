@@ -463,6 +463,8 @@ export const MappingSchema = z.object({
   simulatorNames: z.array(z.string().trim().min(1)).default([]),
   actions: z.array(ActionSchema).default([]),
   debounceMs: z.number().int().min(0).max(600_000).default(0),
+  /** Wait this long after the trigger matches before the actions run. 0 = immediately. */
+  delayMs: z.number().int().min(0).max(600_000).default(0),
   /**
    * Mapping groups this mapping belongs to. It only fires while one of them is
    * the active group; empty = fires in every group.

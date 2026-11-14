@@ -138,6 +138,7 @@ export function seedMappings(scenes: Record<string, Scene>): Mapping[] {
       }
     ],
     debounceMs: 0,
+    delayMs: 0,
     groupIds: [],
     notes: 'Seeded. Alert level → scene on the Alert layer.'
   })
@@ -163,6 +164,7 @@ export function seedMappings(scenes: Record<string, Scene>): Mapping[] {
       simulatorNames: [],
       actions: [{ kind: 'blackout', on: true }],
       debounceMs: 0,
+      delayMs: 0,
       groupIds: [],
       notes: 'Seeded. FD "Blackout" station action turns the DMX blackout on.'
     },
@@ -181,6 +183,7 @@ export function seedMappings(scenes: Record<string, Scene>): Mapping[] {
       simulatorNames: [],
       actions: [{ kind: 'blackout', on: false }],
       debounceMs: 0,
+      delayMs: 0,
       groupIds: [],
       notes: 'Seeded.'
     },
@@ -207,6 +210,7 @@ export function seedMappings(scenes: Record<string, Scene>): Mapping[] {
         }
       ],
       debounceMs: 250,
+      delayMs: 0,
       groupIds: [],
       notes: 'Seeded example.'
     },
@@ -230,6 +234,7 @@ export function seedMappings(scenes: Record<string, Scene>): Mapping[] {
         { kind: 'blackout', on: false }
       ],
       debounceMs: 0,
+      delayMs: 0,
       groupIds: [],
       notes: 'Seeded. Clears stale scenes when the FD resets the flight.'
     },
@@ -256,6 +261,7 @@ export function seedMappings(scenes: Record<string, Scene>): Mapping[] {
         }
       ],
       debounceMs: 0,
+      delayMs: 0,
       groupIds: [],
       notes: 'Seeded example of the Thorium "Generic" macro hook. Enable and edit.'
     }

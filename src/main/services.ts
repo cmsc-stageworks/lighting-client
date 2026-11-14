@@ -275,6 +275,7 @@ export class Services extends EventEmitter {
     this.publishTimer = null
     for (const t of this.testHoldTimers.values()) clearTimeout(t)
     this.testHoldTimers.clear()
+    this.engine.cancelPending()
     this.scheduler.stop()
     if (this.store.settings().sendZeroFrameOnExit) await this.outputs.sendZeroAll()
     await this.outputs.stopAll()

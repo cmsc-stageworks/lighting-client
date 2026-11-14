@@ -15,6 +15,8 @@ export interface EventTrace {
   actions: string[]
   /** true when the mapping matched but was skipped by its debounce */
   debounced?: boolean
+  /** The actions were scheduled to run this many ms after the event. */
+  delayedMs?: number
   /** actions the lighting mode held back (see shared/lightingMode.ts) */
   heldBack?: { action: string; reason: string }[]
 }

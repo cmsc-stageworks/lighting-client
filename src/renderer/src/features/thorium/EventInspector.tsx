@@ -213,7 +213,10 @@ export function EventInspector({
                                   — matched but skipped (debounce)
                                 </span>
                               ) : t.actions.length ? (
-                                <span className="text-muted"> → {t.actions.join(' · ')}</span>
+                                <span className="text-muted">
+                                  {t.delayedMs ? ` → after ${t.delayedMs} ms: ` : ' → '}
+                                  {t.actions.join(' · ')}
+                                </span>
                               ) : t.heldBack?.length ? null : (
                                 <span className="text-faint"> → no actions</span>
                               )}
