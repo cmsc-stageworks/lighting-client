@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { LevelSource } from './schema/config.schema'
-import { readLevelInput, resolveFadeMs, scaleLevel, resolveHoldMs } from './levels'
+import { pickHoldValue, readLevelInput, resolveFadeMs, scaleLevel, resolveHoldMs } from './levels'
 
 const src = (over: Partial<LevelSource> = {}): LevelSource => ({
   path: 'intensity',
@@ -96,5 +96,19 @@ describe('resolveHoldMs', () => {
   it('handles fixed and latch', () => {
     expect(resolveHoldMs({ kind: 'fixed', ms: 300 }, { duration: 4000 })).toBe(300)
     expect(resolveHoldMs({ kind: 'latch' }, { duration: 4000 })).toBeNull()
+  })
+})
+
+describe('pickHoldValue', () => {
+  it('returns the fixed value when there is no range', () => {
+    expect(pickHoldValue({ value: 77, random: null })).toBe(77)
+  })
+  it('spans the range inclusively', () => {
+    const a = { value: 0, random: { min: 10, max: 20 } }
+    expect(pickHoldValue(a, () => 0)).toBe(10)
+    expect(pickHoldValue(a, () => 0.9999)).toBe(20)
+  })
+  it('returns the single value when min equals max', () => {
+    expect(pickHoldValue({ value: 0, random: { min: 5, max: 5 } }, () => 0.5)).toBe(5)
   })
 })

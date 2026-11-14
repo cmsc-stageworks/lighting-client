@@ -65,6 +65,7 @@ function defaultAction(
         addressing: 'relative',
         channels: [0],
         value: 255,
+        random: null,
         hold: { kind: 'fromEvent', path: 'duration', units: 'ms', fallbackMs: 1000 },
         fallback: null,
         fade: { kind: 'none' },
@@ -609,14 +610,63 @@ export function ActionsEditor({
             {a.kind === 'holdLevel' && (
               <>
                 <LevelAddressFields a={a} onChange={(next) => setAt(i, next)} />
-                <Field label="Value" hint="0–255, held for as long as the event says">
-                  <NumberInput
-                    value={a.value}
-                    min={0}
-                    max={255}
-                    onChange={(v) => setAt(i, { ...a, value: v })}
+                <Field label="Value type">
+                  <Select
+                    value={a.random ? 'random' : 'fixed'}
+                    onChange={(v) =>
+                      setAt(i, {
+                        ...a,
+                        random: v === 'random' ? (a.random ?? { min: 0, max: 255 }) : null
+                      })
+                    }
+                    options={[
+                      { value: 'fixed', label: 'Fixed value' },
+                      { value: 'random', label: 'Random in range' }
+                    ]}
                   />
                 </Field>
+                {a.random ? (
+                  <>
+                    <Field label="Random min" hint="0–255">
+                      <NumberInput
+                        value={a.random.min}
+                        min={0}
+                        max={255}
+                        onChange={(v) =>
+                          setAt(i, {
+                            ...a,
+                            random: { min: v, max: Math.max(v, a.random!.max) }
+                          })
+                        }
+                      />
+                    </Field>
+                    <Field
+                      label="Random max"
+                      hint="A new value each time the trigger fires, the same on every channel"
+                    >
+                      <NumberInput
+                        value={a.random.max}
+                        min={0}
+                        max={255}
+                        onChange={(v) =>
+                          setAt(i, {
+                            ...a,
+                            random: { min: Math.min(v, a.random!.min), max: v }
+                          })
+                        }
+                      />
+                    </Field>
+                  </>
+                ) : (
+                  <Field label="Value" hint="0–255, held for as long as the event says">
+                    <NumberInput
+                      value={a.value}
+                      min={0}
+                      max={255}
+                      onChange={(v) => setAt(i, { ...a, value: v })}
+                    />
+                  </Field>
+                )}
                 <HoldFields
                   hold={a.hold}
                   onChange={(h) =>

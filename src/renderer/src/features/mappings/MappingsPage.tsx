@@ -68,7 +68,7 @@ function describeAction(
       const span = (h: typeof a.hold): string =>
         h.kind === 'latch' ? 'until released' : h.kind === 'fixed' ? `${h.ms}ms` : h.path
       const then = a.fallback ? ` → ${a.fallback.value} for ${span(a.fallback.hold)}` : ''
-      return `${a.label || 'Hold'} · ch ${a.channels.join(', ')} at ${a.value} for ${span(a.hold)}${then}`
+      return `${a.label || 'Hold'} · ch ${a.channels.join(', ')} at ${a.random ? `random ${a.random.min}–${a.random.max}` : a.value} for ${span(a.hold)}${then}`
     }
     case 'publishMqtt':
       return `Publish ${a.topic}`
